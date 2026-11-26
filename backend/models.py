@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class AccessibilityProfile(str, Enum):
-    """Perfiles de accesibilidad definidos en la Pantalla 1 del boceto."""
+    """Perfiles de accesibilidad definidos en Map Inclusive."""
 
     SILLA_DE_RUEDAS = "silla_de_ruedas"
     VISUAL = "visual"
@@ -33,8 +33,11 @@ class RiskLevel(str, Enum):
     ALTO = "alto"
 
 
+# ---------------------------------------------------------------------------
+# Entorno y Gemini API
+# ---------------------------------------------------------------------------
 class EnvironmentCheckRequest(BaseModel):
-    """Solicitud enviada desde Android (Pantalla 3) o script CLI."""
+    """Solicitud enviada desde la app móvil (Pantalla 3) o script CLI."""
 
     origin: str = Field(
         default="Campus Coyoacán, CDMX",
@@ -100,7 +103,7 @@ class SourceCitation(BaseModel):
 
 
 class EnvironmentCheckResponse(BaseModel):
-    """Respuesta completa consumida por la app Android cada 10 minutos."""
+    """Respuesta completa consumida por la app móvil cada 10 minutos."""
 
     origin: str
     destination: str
@@ -127,22 +130,53 @@ class EnvironmentCheckResponse(BaseModel):
     fuentes: List[SourceCitation] = Field(default_factory=list)
 
 
-class IncidentCreateRequest(BaseModel):
-    """Reporte ciudadano de incidencia enviado desde la Pantalla 4."""
+# ---------------------------------------------------------------------------
+# Rutas independientes por discapacidad y tiempo estimado
+# ---------------------------------------------------------------------------
+class RouteEstimate(BaseModel):
+    id: str
+    destination: str
+    address: str
+    category: str
+    profile: AccessibilityProfile
+    profile_label: str
+    route_name: str
+    distance_km: float
+    distance_text: str
+    estimated_minutes: int
+    accessibility_summary: str
+    steps: List[str]
 
+
+# ---------------------------------------------------------------------------
+# Clínicas (con horario, accesibilidad y requisitos que debe llevar el usuario)
+# ---------------------------------------------------------------------------
+class ClinicInfo(BaseModel):
+    id: str
+    name: str
+    address: str
+    distance_text: str
+    distance_km: float
+    estimated_minutes: int
+    schedule: str
+    emergency_hours: str
+    phone: str
+    accessible_entrance: bool
+    accessibility_features: List[str]
+    services: List[str]
+    requirements_to_bring: List[str]
+    latitude: float
+    longitude: float
+
+
+# ---------------------------------------------------------------------------
+# Incidencias ciudadanas
+# ---------------------------------------------------------------------------
+class IncidentCreateRequest(BaseModel):
     title: str = Field(..., min_length=3, description="Título corto, ej. 'Rampa bloqueada'")
-    description: str = Field(
-        default="",
-        description="Descripción opcional del obstáculo o problema.",
-    )
-    location: str = Field(
-        default="Av. Universidad, Coyoacán",
-        description="Ubicación aproximada de la incidencia.",
-    )
-    profile: AccessibilityProfile = Field(
-        default=AccessibilityProfile.SILLA_DE_RUEDAS,
-        description="Perfil principalmente afectado.",
-    )
+    description: str = Field(default="", description="Descripción opcional del obstáculo.")
+    location: str = Field(default="Av. Universidad, Coyoacán")
+    profile: AccessibilityProfile = Field(default=AccessibilityProfile.SILLA_DE_RUEDAS)
 
 
 class IncidentRecord(BaseModel):
@@ -156,15 +190,59 @@ class IncidentRecord(BaseModel):
     created_at: str
 
 
-class ClinicInfo(BaseModel):
+# ---------------------------------------------------------------------------
+# Perfil, Autenticación (usuario + correo + contraseña + discapacidad)
+# ---------------------------------------------------------------------------
+class UserRegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=40)
+    email: str = Field(..., min_length=5, max_length=120)
+    password: str = Field(..., min_length=6, max_length=128)
+    disability_profile: AccessibilityProfile = Field(
+        default=AccessibilityProfile.SILLA_DE_RUEDAS
+    )
+
+
+class UserLoginRequest(BaseModel):
+    identifier: str = Field(..., min_length=3, description="Nombre de usuario o correo vinculado")
+    password: str = Field(..., min_length=1)
+
+
+class UpdateDisabilityRequest(BaseModel):
+    user_id: str
+    disability_profile: AccessibilityProfile
+
+
+class UserProfileResponse(BaseModel):
     id: str
-    name: str
-    address: str
-    distance_text: str
-    schedule: str
-    accessible_entrance: bool
-    latitude: float
-    longitude: float
+    username: str
+    email: str
+    disability_profile: AccessibilityProfile
+    disability_label: str
+    is_volunteer: bool
+    created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Voluntarios (lista inicialmente vacía + postulación desde Perfil)
+# ---------------------------------------------------------------------------
+class VolunteerApplicationRequest(BaseModel):
+    user_id: str
+    zone: str = Field(default="Campus Coyoacán / Av. Universidad")
+    availability: str = Field(default="Lun-Vie 09:00 - 18:00")
+    support_notes: str = Field(
+        default="Acompañamiento peatonal y apoyo en cruces accesibles."
+    )
+
+
+class VolunteerMember(BaseModel):
+    id: str
+    user_id: str
+    username: str
+    email: str
+    zone: str
+    availability: str
+    support_notes: str
+    registered_at: str
 
 
 class VolunteerRequest(BaseModel):
@@ -177,6 +255,25 @@ class VolunteerRequest(BaseModel):
 class VolunteerResponse(BaseModel):
     request_id: str
     status: str
-    volunteer_name: str
-    eta_minutes: int
+    volunteer_name: Optional[str] = None
+    eta_minutes: Optional[int] = None
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# Emergencia SOS
+# ---------------------------------------------------------------------------
+class EmergencyAlertRequest(BaseModel):
+    location: str = Field(default="Av. Universidad, Coyoacán, CDMX")
+    profile: AccessibilityProfile = Field(default=AccessibilityProfile.SILLA_DE_RUEDAS)
+    username: Optional[str] = None
+    notes: str = Field(default="Solicitud de ayuda inmediata desde Map Inclusive")
+
+
+class EmergencyAlertResponse(BaseModel):
+    alert_id: str
+    status: str
+    timestamp: str
+    nearest_emergency_clinic: str
+    emergency_numbers: List[str]
     message: str

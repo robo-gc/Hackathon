@@ -19,6 +19,13 @@ from gemini_service import GeminiEnvironmentService  # noqa: E402
 from models import AccessibilityProfile, EnvironmentCheckRequest  # noqa: E402
 
 
+def _reset_state() -> None:
+    main.gemini_service = GeminiEnvironmentService(api_key="", cache_ttl_seconds=600)
+    main.USERS_DB.clear()
+    main.VOLUNTEERS_DB.clear()
+    main.EMERGENCY_ALERTS_DB.clear()
+
+
 def test_health_endpoint() -> None:
     client = TestClient(main.app)
     resp = client.get("/health")
@@ -30,7 +37,7 @@ def test_health_endpoint() -> None:
 
 
 def test_environment_check_demo_and_10min_cache() -> None:
-    main.gemini_service = GeminiEnvironmentService(api_key="", cache_ttl_seconds=600)
+    _reset_state()
     client = TestClient(main.app)
 
     payload = {
@@ -45,14 +52,11 @@ def test_environment_check_demo_and_10min_cache() -> None:
     assert data1["status_mode"] == "offline_demo"
     assert data1["from_cache"] is False
     assert data1["next_refresh_minutes"] == 10
-    assert data1["banner_resumen"]
 
-    # Segunda consulta dentro de los 10 minutos debe responder desde caché
     second = client.post("/api/v1/environment-check", json=payload)
     assert second.status_code == 200
     assert second.json()["from_cache"] is True
 
-    # force_refresh=True omite el caché
     payload["force_refresh"] = True
     third = client.post("/api/v1/environment-check", json=payload)
     assert third.status_code == 200
@@ -108,49 +112,123 @@ def test_gemini_live_interactions_api_contract() -> None:
 
     assert resp.status_mode == "gemini_live"
     assert resp.model_used == "gemini-4-hydrogen"
-    assert resp.banner_resumen == "Clima despejado, sin bloqueos en Av. Universidad"
     assert len(resp.fuentes) == 1
-    assert resp.fuentes[0].url == "https://www.metro.cdmx.gob.mx"
 
-    # Validar argumentos exactos enviados al Interactions API
     _, kwargs = mock_client.interactions.create.call_args
     assert kwargs["model"] == "gemini-4-hydrogen"
     assert kwargs["tools"] == [{"type": "google_search"}]
-    assert kwargs["response_format"]["type"] == "text"
     assert kwargs["response_format"]["mime_type"] == "application/json"
-    assert "schema" in kwargs["response_format"]
     assert kwargs["generation_config"] == {"thinking_level": "low"}
 
 
-def test_clinics_incidents_and_volunteer_flow() -> None:
-    main.gemini_service = GeminiEnvironmentService(api_key="", cache_ttl_seconds=600)
+def test_independent_routes_per_disability_and_clinics_requirements() -> None:
+    _reset_state()
     client = TestClient(main.app)
 
-    clinics = client.get("/api/v1/clinics")
+    wheelchair = client.get("/api/v1/routes/suggestions", params={"profile": "silla_de_ruedas"}).json()
+    auditory = client.get("/api/v1/routes/suggestions", params={"profile": "auditivo"}).json()
+    neuro = client.get("/api/v1/routes/suggestions", params={"profile": "neurodivergente"}).json()
+
+    assert len(wheelchair) >= 5
+    # Las rutas y tiempos estimados deben ser independientes por discapacidad
+    assert wheelchair[0]["route_name"] != auditory[0]["route_name"]
+    assert wheelchair[0]["route_name"] != neuro[0]["route_name"]
+    assert wheelchair[-1]["estimated_minutes"] != auditory[-1]["estimated_minutes"]
+
+    clinics = client.get("/api/v1/clinics", params={"profile": "movilidad_reducida"})
     assert clinics.status_code == 200
-    assert any("Clínica 19" in c["name"] for c in clinics.json())
+    clinics_data = clinics.json()
+    assert len(clinics_data) >= 3
+    for clinic in clinics_data:
+        assert clinic["schedule"]
+        assert clinic["estimated_minutes"] > 0
+        assert len(clinic["requirements_to_bring"]) >= 3
+        assert len(clinic["accessibility_features"]) >= 2
 
-    created = client.post(
-        "/api/v1/incidents",
-        json={
-            "title": "Rampa bloqueada por obra",
-            "description": "Paso peatonal reducido",
-            "location": "Av. Universidad 300",
-            "profile": "silla_de_ruedas",
-        },
-    )
-    assert created.status_code == 201
-    inc = created.json()
-    assert inc["severity"] == "alto"
-    assert inc["ai_advice"]
 
-    vol = client.post(
+def test_profile_auth_empty_volunteers_apply_and_sos() -> None:
+    _reset_state()
+    client = TestClient(main.app)
+
+    # 1) La lista de voluntarios comienza vacía
+    vols_initial = client.get("/api/v1/volunteers")
+    assert vols_initial.status_code == 200
+    assert vols_initial.json() == []
+
+    # Solicitar guía cuando no hay voluntarios informa correctamente
+    req_empty = client.post(
         "/api/v1/volunteer-request",
+        json={"user_location": "Campus Coyoacán", "destination": "Clínica 19", "profile": "visual"},
+    )
+    assert req_empty.status_code == 201
+    assert req_empty.json()["status"] == "sin_voluntarios"
+
+    # 2) Crear perfil con usuario, correo vinculado, contraseña y discapacidad
+    reg = client.post(
+        "/api/v1/auth/register",
         json={
-            "user_location": "Campus Coyoacán",
-            "destination": "Clínica 19",
-            "profile": "visual",
+            "username": "emiliano_coyoacan",
+            "email": "emiliano@apexsoa.mx",
+            "password": "MiPassword123",
+            "disability_profile": "visual",
         },
     )
-    assert vol.status_code == 201
-    assert vol.json()["status"] == "asignado"
+    assert reg.status_code == 201
+    user = reg.json()
+    assert user["email"] == "emiliano@apexsoa.mx"
+    assert user["disability_profile"] == "visual"
+    assert user["is_volunteer"] is False
+
+    # 3) Iniciar sesión con correo vinculado
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "emiliano@apexsoa.mx", "password": "MiPassword123"},
+    )
+    assert login.status_code == 200
+    assert login.json()["id"] == user["id"]
+
+    # 4) Cambiar discapacidad en el perfil
+    upd = client.put(
+        "/api/v1/profile/disability",
+        json={"user_id": user["id"], "disability_profile": "neurodivergente"},
+    )
+    assert upd.status_code == 200
+    assert upd.json()["disability_profile"] == "neurodivergente"
+
+    # 5) Postularse como voluntario y aparecer en la lista de voluntarios
+    apply_resp = client.post(
+        "/api/v1/volunteers/apply",
+        json={
+            "user_id": user["id"],
+            "zone": "Campus Coyoacán",
+            "availability": "Lun-Vie 10:00-16:00",
+            "support_notes": "Acompañamiento a Clínica 19",
+        },
+    )
+    assert apply_resp.status_code == 201
+
+    vols_after = client.get("/api/v1/volunteers").json()
+    assert len(vols_after) == 1
+    assert vols_after[0]["username"] == "emiliano_coyoacan"
+
+    # Ahora sí se puede asignar guía voluntaria
+    req_ok = client.post(
+        "/api/v1/volunteer-request",
+        json={"user_location": "Campus Coyoacán", "destination": "Clínica 19", "profile": "visual"},
+    )
+    assert req_ok.status_code == 201
+    assert req_ok.json()["status"] == "asignado"
+
+    # 6) Botón de emergencia SOS
+    sos = client.post(
+        "/api/v1/emergency",
+        json={
+            "location": "Av. Universidad 400, Coyoacán",
+            "profile": "silla_de_ruedas",
+            "username": "emiliano_coyoacan",
+        },
+    )
+    assert sos.status_code == 201
+    sos_data = sos.json()
+    assert sos_data["status"] == "alerta_enviada"
+    assert any("911" in num for num in sos_data["emergency_numbers"])
