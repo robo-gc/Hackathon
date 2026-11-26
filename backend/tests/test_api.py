@@ -136,7 +136,8 @@ def test_multi_disability_routes_and_clinics_requirements() -> None:
     _reset_state()
     client = TestClient(main.app)
 
-    single = client.get("/api/v1/routes/suggestions", params={"profiles": "auditivo"}).json()
+    single_auditivo = client.get("/api/v1/routes/suggestions", params={"profiles": "auditivo"}).json()
+    single_visual = client.get("/api/v1/routes/suggestions", params={"profiles": "visual"}).json()
     combo = client.get(
         "/api/v1/routes/suggestions",
         params={"profiles": "silla_de_ruedas,visual,neurodivergente"},
@@ -144,8 +145,23 @@ def test_multi_disability_routes_and_clinics_requirements() -> None:
 
     assert len(combo) >= 5
     assert combo[0]["disabilities"] == ["silla_de_ruedas", "visual", "neurodivergente"]
-    assert combo[-1]["estimated_minutes"] > single[-1]["estimated_minutes"]
+    assert combo[-1]["estimated_minutes"] > single_auditivo[-1]["estimated_minutes"]
     assert len(combo[0]["steps"]) >= 4
+
+    # Instrucciones paso a paso diferentes por discapacidad y SIN voz para perfil auditivo
+    assert single_auditivo[0]["voice_guidance_recommended"] is False
+    assert len(single_auditivo[0]["navigation_steps"]) == 4
+    assert all(step["spoken_text"] == "" for step in single_auditivo[0]["navigation_steps"])
+    assert "semáforo sonoro" not in single_auditivo[0]["navigation_steps"][1]["detail"].lower()
+
+    assert single_visual[0]["voice_guidance_recommended"] is True
+    assert all(step["spoken_text"] != "" for step in single_visual[0]["navigation_steps"])
+    assert single_visual[0]["navigation_steps"][0]["headline"] != combo[0]["navigation_steps"][0]["headline"]
+
+    # Combinado con auditivo también desactiva voz por seguridad
+    combo_deaf = client.get("/api/v1/routes/estimate", params={"profiles": "visual,auditivo"}).json()
+    assert combo_deaf["voice_guidance_recommended"] is False
+    assert all(step["spoken_text"] == "" for step in combo_deaf["navigation_steps"])
 
     clinics = client.get("/api/v1/clinics", params={"profiles": "silla_de_ruedas,visual"})
     assert clinics.status_code == 200

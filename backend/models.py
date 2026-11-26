@@ -151,8 +151,18 @@ class EnvironmentCheckResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Rutas independientes (soporta 1 o múltiples discapacidades)
+# Rutas independientes (soporta 1 o múltiples discapacidades + guía paso a paso)
 # ---------------------------------------------------------------------------
+class NavigationStep(BaseModel):
+    step_number: int
+    direction: str = Field(description="straight | right | left | arrive")
+    distance_meters: int
+    headline: str
+    detail: str
+    spoken_text: str
+    visual_cue: str
+
+
 class RouteEstimate(BaseModel):
     id: str
     destination: str
@@ -167,7 +177,9 @@ class RouteEstimate(BaseModel):
     distance_text: str
     estimated_minutes: int
     accessibility_summary: str
+    voice_guidance_recommended: bool = True
     steps: List[str]
+    navigation_steps: List[NavigationStep] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

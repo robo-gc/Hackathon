@@ -1,17 +1,17 @@
 """Map Inclusive — App móvil para Android hecha 100% en Python (Flet / motor Flutter).
 
 Sin una sola línea de Java. Implementa:
+- Modo Día y Modo Noche/Oscuro de alto contraste (todos los textos y campos 100% legibles).
 - Selección de UNA O MÚLTIPLES discapacidades (inicio, ruta y perfil) con rutas y tiempos
   estimados combinados e independientes.
-- Lista vertical de sugerencias de rutas con distancia y tiempo estimado.
-- Pantalla de Ruta Accesible con actualización automática de Gemini cada 10 minutos.
-- Historial completo de incidencias + reporte nuevo clasificado con Gemini.
+- Simulador de navegación paso a paso con instrucciones por VOZ en español adaptadas a cada
+  discapacidad (y Modo Visual sin audio para personas con discapacidad auditiva).
+- Reporte de incidencias estilo Waze ("¿Qué ves?") con cuadrícula visual de íconos +
+  Historial cronológico completo clasificado con Google Gemini.
 - Lista completa de clínicas con horarios, accesibilidad, teléfono y qué debes llevar.
-- Voluntarios: foto de rostro OBLIGATORIA para postularse e identificación visual en lista
-  (lista inicialmente vacía). Usuarios regulares pueden subir foto de forma OPCIONAL.
-- Protección para menores de edad: registro de familiar/tutor, envío de ubicación en tiempo
-  real y botón "Me extravié" con alarma sonora real para alertar a personas cercanas.
-- Botón de Emergencia (SOS) siempre accesible.
+- Voluntarios con foto de rostro OBLIGATORIA (usuarios regulares con foto opcional).
+- Protección para menores: ubicación en tiempo real a familiar + alarma sonora de extravío.
+- Botón de Emergencia (SOS) siempre visible.
 
 Ejecución local:
     python mobile_app/main.py
@@ -41,25 +41,301 @@ from typing import Any, Callable, Dict, List, Optional
 import flet as ft
 import httpx
 
-# Paleta oficial de alto contraste de Map Inclusive
-INDIGO_DARK = "#1B2354"
-BLUE_ACTION = "#2563EB"
-EMERALD_GREEN = "#0E9F6E"
-EMERALD_SURFACE = "#D1FAE5"
-ALERT_ORANGE = "#EA7B1B"
-WARN_SURFACE = "#FEF3C7"
-NEUTRAL_BG = "#F5F6FA"
-CARD_BORDER = "#DCE1EC"
-TEXT_MUTED = "#4B5563"
-DANGER_RED = "#DC2626"
-DANGER_SURFACE = "#FEE2E2"
-INFO_BLUE_BG = "#DBEAFE"
-
 TEN_MINUTES_SECONDS = 600
 MINOR_TRACKING_INTERVAL_SECONDS = 15
+SIMULATION_STEP_INTERVAL_SECONDS = 7
 DEFAULT_API_URL = os.getenv("MAP_INCLUSIVE_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
+# ---------------------------------------------------------------------------
+# Sistema de Temas: Modo Día (Claro) y Modo Noche (Oscuro) de Alto Contraste
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ThemePalette:
+    is_dark: bool
+    bg: str
+    card_bg: str
+    card_alt: str
+    border: str
+    text_primary: str
+    text_heading: str
+    text_muted: str
+    input_bg: str
+    input_text: str
+    input_label: str
+    input_hint: str
+    input_border: str
+    input_focus: str
+    nav_bg: str
+    indigo: str
+    blue_action: str
+    emerald: str
+    emerald_bg: str
+    emerald_text: str
+    alert_orange: str
+    warn_bg: str
+    warn_text: str
+    danger_red: str
+    danger_bg: str
+    danger_text: str
+    info_bg: str
+    info_text: str
+    badge_bg: str
+    badge_text: str
+    map_bg: str
+    map_street: str
+    map_park: str
+    map_route: str
+    chip_idle_bg: str
+    chip_idle_text: str
+    chip_active_bg: str
+    chip_active_text: str
+
+
+LIGHT_THEME = ThemePalette(
+    is_dark=False,
+    bg="#F1F5F9",
+    card_bg="#FFFFFF",
+    card_alt="#EEF2F7",
+    border="#CBD5E1",
+    text_primary="#0F172A",
+    text_heading="#1B2354",
+    text_muted="#334155",
+    input_bg="#FFFFFF",
+    input_text="#0F172A",
+    input_label="#1E293B",
+    input_hint="#64748B",
+    input_border="#94A3B8",
+    input_focus="#2563EB",
+    nav_bg="#FFFFFF",
+    indigo="#1B2354",
+    blue_action="#2563EB",
+    emerald="#0E9F6E",
+    emerald_bg="#D1FAE5",
+    emerald_text="#065F46",
+    alert_orange="#EA7B1B",
+    warn_bg="#FEF3C7",
+    warn_text="#92400E",
+    danger_red="#DC2626",
+    danger_bg="#FEE2E2",
+    danger_text="#991B1B",
+    info_bg="#DBEAFE",
+    info_text="#1E3A8A",
+    badge_bg="#E0E7FF",
+    badge_text="#1B2354",
+    map_bg="#E2E8F0",
+    map_street="#FFFFFF",
+    map_park="#CBEAD8",
+    map_route="#1B2354",
+    chip_idle_bg="#FFFFFF",
+    chip_idle_text="#1B2354",
+    chip_active_bg="#1B2354",
+    chip_active_text="#FFFFFF",
+)
+
+DARK_THEME = ThemePalette(
+    is_dark=True,
+    bg="#0B1120",
+    card_bg="#151E32",
+    card_alt="#1E293B",
+    border="#334155",
+    text_primary="#F8FAFC",
+    text_heading="#F8FAFC",
+    text_muted="#CBD5E1",
+    input_bg="#1E293B",
+    input_text="#F8FAFC",
+    input_label="#93C5FD",
+    input_hint="#94A3B8",
+    input_border="#475569",
+    input_focus="#60A5FA",
+    nav_bg="#0F172A",
+    indigo="#1E3A8A",
+    blue_action="#3B82F6",
+    emerald="#10B981",
+    emerald_bg="#064E3B",
+    emerald_text="#A7F3D0",
+    alert_orange="#F97316",
+    warn_bg="#78350F",
+    warn_text="#FDE68A",
+    danger_red="#EF4444",
+    danger_bg="#7F1D1D",
+    danger_text="#FECACA",
+    info_bg="#1E3A8A",
+    info_text="#DBEAFE",
+    badge_bg="#1E3A8A",
+    badge_text="#E0E7FF",
+    map_bg="#0F172A",
+    map_street="#334155",
+    map_park="#064E3B",
+    map_route="#60A5FA",
+    chip_idle_bg="#1E293B",
+    chip_idle_text="#E2E8F0",
+    chip_active_bg="#3B82F6",
+    chip_active_text="#FFFFFF",
+)
+
+
+def get_theme(dark_mode: bool) -> ThemePalette:
+    return DARK_THEME if dark_mode else LIGHT_THEME
+
+
+def styled_text_field(
+    t: ThemePalette,
+    *,
+    label: Optional[str] = None,
+    hint_text: Optional[str] = None,
+    value: str = "",
+    prefix_icon: Any = None,
+    password: bool = False,
+    can_reveal_password: bool = False,
+    multiline: bool = False,
+    expand: bool = False,
+    on_change: Optional[Callable[[ft.ControlEvent], None]] = None,
+) -> ft.TextField:
+    """TextField con alto contraste garantizado en Modo Día y Modo Noche."""
+    return ft.TextField(
+        label=label,
+        hint_text=hint_text,
+        value=value,
+        prefix_icon=prefix_icon,
+        password=password,
+        can_reveal_password=can_reveal_password,
+        multiline=multiline,
+        expand=expand,
+        color=t.input_text,
+        bgcolor=t.input_bg,
+        cursor_color=t.input_focus,
+        border_color=t.input_border,
+        focused_border_color=t.input_focus,
+        border_radius=12,
+        label_style=ft.TextStyle(color=t.input_label, weight=ft.FontWeight.W_600),
+        hint_style=ft.TextStyle(color=t.input_hint),
+        on_change=on_change,
+    )
+
+
+def styled_outlined_button(
+    t: ThemePalette,
+    *,
+    text: str,
+    icon: Any = None,
+    icon_color: Optional[str] = None,
+    text_color: Optional[str] = None,
+    border_color: Optional[str] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    expand: bool = False,
+    on_click: Optional[Callable[[ft.ControlEvent], None]] = None,
+) -> ft.OutlinedButton:
+    fg = text_color or t.text_primary
+    bc = border_color or t.border
+    return ft.OutlinedButton(
+        content=ft.Text(text, color=fg, weight=ft.FontWeight.W_600, size=13),
+        icon=icon,
+        icon_color=icon_color or fg,
+        width=width,
+        height=height,
+        expand=expand,
+        style=ft.ButtonStyle(
+            side=ft.BorderSide(1.2, bc),
+            color=fg,
+        ),
+        on_click=on_click,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Catálogo Waze-style de tipos de incidencias ("¿Qué ves?")
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class WazeIncidentCategory:
+    id: str
+    title: str
+    short_label: str
+    default_desc: str
+    icon: Any
+    color: str
+
+
+WAZE_INCIDENT_CATEGORIES: List[WazeIncidentCategory] = [
+    WazeIncidentCategory(
+        id="rampa_bloqueada",
+        title="Rampa bloqueada",
+        short_label="Rampa\nbloqueada",
+        default_desc="Vehículo u objeto obstruyendo la rampa peatonal.",
+        icon=ft.Icons.ACCESSIBLE,
+        color="#EA7B1B",
+    ),
+    WazeIncidentCategory(
+        id="obra_banqueta",
+        title="Obra o banqueta rota",
+        short_label="Obra /\nBanqueta",
+        default_desc="Trabajos en la acera o pavimento dañado que dificulta el paso.",
+        icon=ft.Icons.CONSTRUCTION,
+        color="#D97706",
+    ),
+    WazeIncidentCategory(
+        id="zona_peligrosa",
+        title="Zona poco concurrida o peligrosa",
+        short_label="Zona\npeligrosa",
+        default_desc="Calle solitaria o situación de riesgo en la zona.",
+        icon=ft.Icons.WARNING_AMBER,
+        color="#DC2626",
+    ),
+    WazeIncidentCategory(
+        id="semaforo_sonoro",
+        title="Semáforo sonoro dañado",
+        short_label="Semáforo\nsonoro",
+        default_desc="El semáforo peatonal no emite aviso sonoro ni luminoso.",
+        icon=ft.Icons.VOLUME_OFF,
+        color="#7C3AED",
+    ),
+    WazeIncidentCategory(
+        id="elevador_fuera",
+        title="Elevador fuera de servicio",
+        short_label="Elevador\ndañado",
+        default_desc="Elevador o plataforma accesible sin funcionar en estación o puente.",
+        icon=ft.Icons.ELEVATOR,
+        color="#2563EB",
+    ),
+    WazeIncidentCategory(
+        id="inundacion_clima",
+        title="Encharcamiento / Lluvia",
+        short_label="Lluvia /\nCharco",
+        default_desc="Agua acumulada en cruce peatonal o banqueta resbalosa.",
+        icon=ft.Icons.WATER_DROP,
+        color="#0891B2",
+    ),
+    WazeIncidentCategory(
+        id="calle_cerrada",
+        title="Calle cerrada o bloqueo",
+        short_label="Calle\ncerrada",
+        default_desc="Cierre vial o manifestación impidiendo el cruce normal.",
+        icon=ft.Icons.BLOCK,
+        color="#B91C1C",
+    ),
+    WazeIncidentCategory(
+        id="ruido_aglomeracion",
+        title="Ruido extremo / Aglomeración",
+        short_label="Ruido /\nMultitud",
+        default_desc="Alta sobrecarga sensorial por ruido fuerte o concentración de personas.",
+        icon=ft.Icons.CAMPAIGN,
+        color="#DB2777",
+    ),
+    WazeIncidentCategory(
+        id="sin_iluminacion",
+        title="Tramo sin iluminación",
+        short_label="Sin\niluminación",
+        default_desc="Luminarias apagadas con baja visibilidad nocturna.",
+        icon=ft.Icons.NIGHTLIGHT_ROUND,
+        color="#4338CA",
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# Perfiles de discapacidad y lógica de rutas combinables + pasos guiados
+# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ProfileOption:
     api_value: str
@@ -104,11 +380,11 @@ PROFILES: List[ProfileOption] = [
         label="Auditivo",
         short_label="Auditivo",
         icon=ft.Icons.HEARING,
-        nav_hint="Cruce con señalización visual clara",
+        nav_hint="Guía 100% visual · sin depender de audio",
         route_prefix="Alta visibilidad",
         distance_factor=1.0,
         minutes_per_km=12.0,
-        accessibility_summary="Cruces con semáforos visibles y alertas visuales cada 10 min.",
+        accessibility_summary="Cruces con semáforos visuales claros y avisos visuales en pantalla (sin audio).",
         step_text="Auditivo: usa el cruce con semáforo luminoso visible en ambos sentidos.",
     ),
     ProfileOption(
@@ -168,10 +444,276 @@ def format_timestamp_short(iso_str: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Instrucciones paso a paso y VOZ en español (100% Python, cero Java)
+# ---------------------------------------------------------------------------
+def build_local_navigation_steps(destination: str, disabilities: List[str]) -> List[Dict[str, Any]]:
+    """Genera 4 pasos de navegación simulada adaptados a cada discapacidad."""
+    active = normalize_disabilities(disabilities)
+    has_auditivo = "auditivo" in active
+    primary = active[0]
+
+    if primary == "auditivo":
+        rows = [
+            (
+                "straight",
+                90,
+                "Sigue derecho 90 m · Corredor visible",
+                "Banqueta despejada con señalización visual de alto contraste. Verifica salidas vehiculares a tu derecha.",
+                "",
+                "ALERTA VISUAL: Banqueta libre · Mantén visibilidad frontal",
+            ),
+            (
+                "right",
+                70,
+                "Gira a la derecha en 70 m · Semáforo peatonal",
+                "Encontrarás un cruce con semáforo peatonal luminoso verde y espejo vial panorámico.",
+                "",
+                "SEMÁFORO LUMINOSO: Espera figura verde fija y mira ambos lados",
+            ),
+            (
+                "straight",
+                50,
+                "Cruza y avanza 50 m · Sin bloqueos",
+                "Paso peatonal amplio y bien iluminado; alertas visuales activas en pantalla cada 10 minutos.",
+                "",
+                "AVANCE SEGURO: Señalización clara hacia tu destino",
+            ),
+            (
+                "arrive",
+                0,
+                f"Llegaste a {destination}",
+                "Entrada principal visible al frente con letrero de acceso.",
+                "",
+                "DESTINO ALCANZADO · Recorrido finalizado",
+            ),
+        ]
+    elif primary == "visual":
+        rows = [
+            (
+                "straight",
+                80,
+                "Sigue derecho 80 m · Guía podotáctil",
+                "Avanza recto siguiendo la línea podotáctil del piso; mantente a la izquierda de los postes.",
+                "" if has_auditivo else "Sigue derecho ochenta metros guiándote por la línea podotáctil del piso. Mantente a tu izquierda para evitar postes.",
+                "Guía podotáctil continua · 80 m recto",
+            ),
+            (
+                "right",
+                60,
+                "Gira a la derecha en 60 m · Cruce seguro",
+                (
+                    "Cruce peatonal señalado con línea táctil de advertencia antes de la esquina."
+                    if has_auditivo
+                    else "A 60 metros encontrarás un semáforo sonoro en Av. Universidad; espera el tono rápido para cruzar."
+                ),
+                "" if has_auditivo else "En sesenta metros gira a la derecha. Encontrarás un semáforo sonoro en Avenida Universidad; espera el tono rápido para cruzar.",
+                "Cruce peatonal accesible · Gira derecha",
+            ),
+            (
+                "straight",
+                45,
+                "Continúa 45 m · Banqueta despejada",
+                "Tramo recto sin obras ni obstáculos a nivel del suelo.",
+                "" if has_auditivo else "Continúa derecho cuarenta y cinco metros. La banqueta está despejada y sin obras reportadas.",
+                "Banqueta libre de obstáculos · 45 m",
+            ),
+            (
+                "arrive",
+                0,
+                f"Has llegado a {destination}",
+                "La puerta principal está a 5 metros directamente frente a ti.",
+                "" if has_auditivo else f"Has llegado a {destination}. La puerta principal está a cinco metros directamente frente a ti.",
+                "Llegada confirmada · Acceso al frente",
+            ),
+        ]
+    elif primary == "movilidad_reducida":
+        rows = [
+            (
+                "straight",
+                70,
+                "Avanza 70 m · Andador plano con barandal",
+                "Camina a tu ritmo por el tramo nivelado sin escalones; tienes barandal de apoyo a tu derecha.",
+                "" if has_auditivo else "Avanza despacio setenta metros por el andador plano. Encontrarás un barandal de apoyo a tu derecha y superficie pareja.",
+                "Andador plano con barandal · 70 m",
+            ),
+            (
+                "right",
+                50,
+                "Gira a la derecha en 50 m · Banca con sombra",
+                "Encontrarás una banca con sombra en la esquina por si deseas tomar un descanso.",
+                "" if has_auditivo else "En cincuenta metros gira a la derecha. Encontrarás una banca con sombra justo en la esquina por si necesitas descansar.",
+                "Zona de descanso con banca disponible",
+            ),
+            (
+                "straight",
+                40,
+                "Continúa 40 m · Acceso sin escaleras",
+                "Pendiente suave menor al 4% directo hacia la entrada preferente.",
+                "" if has_auditivo else "Continúa cuarenta metros por una pendiente suave sin escaleras hacia el acceso preferente.",
+                "Pendiente suave · Sin escaleras",
+            ),
+            (
+                "arrive",
+                0,
+                f"Llegaste a {destination}",
+                "Acceso preferente a nivel de calle justo frente a ti.",
+                "" if has_auditivo else f"Has llegado a {destination}. Tienes el acceso preferente a nivel de calle frente a ti.",
+                "Destino alcanzado · Acceso preferente",
+            ),
+        ]
+    elif primary == "neurodivergente":
+        rows = [
+            (
+                "straight",
+                80,
+                "Paso 1: Camina recto 80 m · Calle tranquila",
+                "Calle arbolada con bajo ruido vehicular y espacio amplio para caminar sin prisas.",
+                "" if has_auditivo else "Paso uno de cuatro. Camina recto ochenta metros por la calle arbolada. Es una zona tranquila con poco ruido.",
+                "Zona tranquila · Baja estimulación",
+            ),
+            (
+                "right",
+                60,
+                "Paso 2: Gira a la derecha en 60 m",
+                "Gira en la esquina del parque. Evitamos la avenida con obras ruidosas.",
+                "" if has_auditivo else "Paso dos de cuatro. Gira a la derecha en sesenta metros en la esquina del parque. Evitamos las obras ruidosas.",
+                "Desvío tranquilo · Sin obras ruidosas",
+            ),
+            (
+                "straight",
+                40,
+                "Paso 3: Cruza con calma · 40 m al frente",
+                "Cruce amplio y ordenado con poco flujo de personas.",
+                "" if has_auditivo else "Paso tres de cuatro. Cruce amplio y ordenado en cuarenta metros. Avanza a tu propio ritmo.",
+                "Paso ordenado · Poco flujo peatonal",
+            ),
+            (
+                "arrive",
+                0,
+                f"Paso 4: Llegaste a {destination}",
+                "Entrada señalizada con zona de espera tranquila adentro.",
+                "" if has_auditivo else f"Paso cuatro de cuatro. Llegaste a {destination}. Encontrarás la entrada tranquila frente a ti.",
+                "Recorrido completado con calma",
+            ),
+        ]
+    else:  # silla_de_ruedas
+        rows = [
+            (
+                "straight",
+                80,
+                "Sigue derecho 80 m · Rampa disponible",
+                "Banqueta norte ancha de Av. Universidad con rampa continua y superficie firme.",
+                "" if has_auditivo else "Sigue derecho ochenta metros por la banqueta norte. Encontrarás una rampa amplia sin escalones.",
+                "Banqueta ancha · Rampa disponible",
+            ),
+            (
+                "right",
+                65,
+                "Gira a la derecha en 65 m · Desvío de obstáculo",
+                "Rodeamos la rampa bloqueada reportada en la esquina; paso libre de escalones.",
+                "" if has_auditivo else "Gira a la derecha en sesenta y cinco metros. Evitamos la rampa bloqueada reportada en la esquina.",
+                "Obstáculo evitado · Ruta sin escalones",
+            ),
+            (
+                "left",
+                45,
+                "Gira a la izquierda en 45 m · Cruce a nivel",
+                "Paso peatonal con rampa en ambos extremos hacia la entrada principal.",
+                "" if has_auditivo else "Gira a la izquierda en cuarenta y cinco metros. Encontrarás un cruce peatonal a nivel de calle con rampa en ambos lados.",
+                "Cruce a nivel · Rampa verificada",
+            ),
+            (
+                "arrive",
+                0,
+                f"Llegaste a {destination}",
+                "Rampa principal de acceso y puerta amplia frente a ti.",
+                "" if has_auditivo else f"Has llegado a {destination}. La rampa principal de acceso está justo frente a ti.",
+                "Llegada accesible · Rampa al frente",
+            ),
+        ]
+
+    extra_notes = [get_profile(d).accessibility_summary for d in active[1:]]
+    extra_suffix = (" | Extra: " + " ".join(extra_notes)) if extra_notes else ""
+
+    return [
+        {
+            "step_number": i,
+            "direction": direction,
+            "distance_meters": dist_m,
+            "headline": headline,
+            "detail": f"{detail}{extra_suffix}" if i == 1 and extra_suffix else detail,
+            "spoken_text": spoken,
+            "visual_cue": visual,
+        }
+        for i, (direction, dist_m, headline, detail, spoken, visual) in enumerate(rows, start=1)
+    ]
+
+
+_ACTIVE_TTS_PROCESS: Optional[subprocess.Popen[Any]] = None
+
+
+def stop_voice_speech() -> None:
+    """Detiene cualquier instrucción de voz en curso."""
+    global _ACTIVE_TTS_PROCESS
+    proc = _ACTIVE_TTS_PROCESS
+    _ACTIVE_TTS_PROCESS = None
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+
+def speak_spanish_instruction(text: str) -> None:
+    """Lee en voz alta una instrucción en español usando el motor nativo del SO (sin Java)."""
+    global _ACTIVE_TTS_PROCESS
+    cleaned = text.strip()
+    if not cleaned:
+        return
+    stop_voice_speech()
+
+    try:
+        if sys.platform == "win32":
+            safe_text = cleaned.replace("'", "''")
+            ps_script = (
+                "Add-Type -AssemblyName System.Speech; "
+                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                "$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'es*' } | Select-Object -First 1; "
+                "if ($v) { $s.SelectVoice($v.VoiceInfo.Name) }; "
+                "$s.Rate = 0; "
+                f"$s.Speak('{safe_text}')"
+            )
+            creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            proc = subprocess.Popen(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags,
+            )
+            _ACTIVE_TTS_PROCESS = proc
+            proc.wait(timeout=18)
+            return
+
+        if sys.platform == "darwin" and shutil.which("say"):
+            proc = subprocess.Popen(["say", cleaned], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _ACTIVE_TTS_PROCESS = proc
+            proc.wait(timeout=18)
+            return
+
+        for cmd in (["espeak-ng", "-v", "es", cleaned], ["espeak", "-v", "es", cleaned], ["spd-say", "-l", "es", cleaned]):
+            if shutil.which(cmd[0]):
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _ACTIVE_TTS_PROCESS = proc
+                proc.wait(timeout=18)
+                return
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Alarma sonora real para extravío de menores (100% Python stdlib, sin Java)
 # ---------------------------------------------------------------------------
 def generate_alert_siren_wav() -> bytes:
-    """Genera una señal sonora audible de doble tono (WAV en memoria) para alertar cercanías."""
     sample_rate = 22050
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -179,10 +721,8 @@ def generate_alert_siren_wav() -> bytes:
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         frames = bytearray()
-        pattern = [(1200, 0.24), (820, 0.24), (1320, 0.24), (820, 0.24)]
-        for freq, duration in pattern:
-            count = int(sample_rate * duration)
-            for i in range(count):
+        for freq, duration in ((1200, 0.24), (820, 0.24), (1320, 0.24), (820, 0.24)):
+            for i in range(int(sample_rate * duration)):
                 sample = int(28000 * math.sin(2.0 * math.pi * freq * i / sample_rate))
                 frames += struct.pack("<h", sample)
         wf.writeframes(bytes(frames))
@@ -193,7 +733,6 @@ _SIREN_WAV_BYTES = generate_alert_siren_wav()
 
 
 def play_alert_sound_once() -> None:
-    """Reproduce un ciclo de la alarma sonora por los altavoces del dispositivo."""
     if sys.platform == "win32":
         try:
             import winsound  # type: ignore[import-not-found]
@@ -210,7 +749,6 @@ def play_alert_sound_once() -> None:
             except Exception:
                 pass
 
-    # Fallback para Linux / macOS
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -229,7 +767,6 @@ def play_alert_sound_once() -> None:
             except OSError:
                 pass
 
-    # Último recurso: campana del sistema
     try:
         print("\a", end="", flush=True)
     except Exception:
@@ -247,44 +784,14 @@ def stop_alert_sound_immediately() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Catálogos locales de respaldo (coinciden con backend/main.py)
+# Catálogos locales de respaldo
 # ---------------------------------------------------------------------------
 LOCAL_SUGGESTIONS_BASE: List[Dict[str, Any]] = [
-    {
-        "id": "sug-clinica-19",
-        "destination": "Clínica 19 (UMF IMSS)",
-        "address": "Av. Universidad, Coyoacán",
-        "category": "Clínica",
-        "base_km": 0.4,
-    },
-    {
-        "id": "sug-centro-salud",
-        "destination": "Centro de Salud T-III Coyoacán",
-        "address": "Calle Ignacio Allende, Del Carmen",
-        "category": "Clínica",
-        "base_km": 0.85,
-    },
-    {
-        "id": "sug-metro-coyoacan",
-        "destination": "Metro Coyoacán (Línea 3)",
-        "address": "Av. Universidad y Mayorazgo",
-        "category": "Transporte",
-        "base_km": 0.95,
-    },
-    {
-        "id": "sug-parque-centenario",
-        "destination": "Jardín Centenario Coyoacán",
-        "address": "Centro de Coyoacán",
-        "category": "Espacio público",
-        "base_km": 1.1,
-    },
-    {
-        "id": "sug-hospital-xoco",
-        "destination": "Hospital General Xoco (Urgencias 24h)",
-        "address": "Av. México Coyoacán s/n",
-        "category": "Hospital",
-        "base_km": 1.4,
-    },
+    {"id": "sug-clinica-19", "destination": "Clínica 19 (UMF IMSS)", "address": "Av. Universidad, Coyoacán", "category": "Clínica", "base_km": 0.4},
+    {"id": "sug-centro-salud", "destination": "Centro de Salud T-III Coyoacán", "address": "Calle Ignacio Allende, Del Carmen", "category": "Clínica", "base_km": 0.85},
+    {"id": "sug-metro-coyoacan", "destination": "Metro Coyoacán (Línea 3)", "address": "Av. Universidad y Mayorazgo", "category": "Transporte", "base_km": 0.95},
+    {"id": "sug-parque-centenario", "destination": "Jardín Centenario Coyoacán", "address": "Centro de Coyoacán", "category": "Espacio público", "base_km": 1.1},
+    {"id": "sug-hospital-xoco", "destination": "Hospital General Xoco (Urgencias 24h)", "address": "Av. México Coyoacán s/n", "category": "Hospital", "base_km": 1.4},
 ]
 
 LOCAL_CLINICS_BASE: List[Dict[str, Any]] = [
@@ -422,20 +929,15 @@ def compute_local_route(
         "distance_text": dist_text,
         "estimated_minutes": est_min,
         "accessibility_summary": " ".join(o.accessibility_summary for o in objs),
+        "voice_guidance_recommended": "auditivo" not in active,
         "steps": [o.step_text for o in objs] + [f"Llegada accesible verificada a {destination}."],
+        "navigation_steps": build_local_navigation_steps(destination, active),
     }
 
 
 def build_local_suggestions(disabilities: List[str]) -> List[Dict[str, Any]]:
     return [
-        compute_local_route(
-            dest_id=p["id"],
-            destination=p["destination"],
-            address=p["address"],
-            category=p["category"],
-            base_km=p["base_km"],
-            disabilities=disabilities,
-        )
+        compute_local_route(p["id"], p["destination"], p["address"], p["category"], p["base_km"], disabilities)
         for p in LOCAL_SUGGESTIONS_BASE
     ]
 
@@ -455,9 +957,8 @@ def build_local_clinics(disabilities: List[str]) -> List[Dict[str, Any]]:
 @dataclass
 class AppState:
     api_url: str = DEFAULT_API_URL
-    # Pantallas: onboarding | search | route | active | incidents | clinics | volunteers | profile
+    dark_mode: bool = False  # Alternable entre Modo Día y Modo Noche/Oscuro
     screen: str = "onboarding"
-    # Múltiples discapacidades simultáneas (mínimo 1)
     disabilities: List[str] = field(default_factory=lambda: ["silla_de_ruedas"])
     origin: str = "Campus Coyoacán, CDMX"
     destination: str = "Clínica 19 (UMF IMSS)"
@@ -480,10 +981,20 @@ class AppState:
         default_factory=lambda: build_local_clinics(["silla_de_ruedas"])
     )
     incidents: List[Dict[str, Any]] = field(default_factory=default_local_incidents)
-    # Lista de voluntarios comienza VACÍA
     volunteers: List[Dict[str, Any]] = field(default_factory=list)
 
-    # Perfil y autenticación (persistimos borradores para no perder texto al re-renderizar)
+    # Simulación paso a paso + Guía de voz en En Camino
+    nav_step_index: int = 0
+    nav_sim_running: bool = False
+    nav_sim_generation: int = 0
+    voice_enabled: bool = True
+
+    # Borrador de reporte estilo Waze ("¿Qué ves?")
+    waze_selected_id: str = "rampa_bloqueada"
+    waze_location: str = "Av. Universidad, Coyoacán"
+    waze_notes: str = ""
+
+    # Perfil y autenticación
     current_user: Optional[Dict[str, Any]] = None
     local_users: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     auth_mode: str = "register"
@@ -501,7 +1012,6 @@ class AppState:
     reg_guardian_phone: str = ""
     reg_guardian_email: str = ""
 
-    # Borradores de postulación de voluntario (foto OBLIGATORIA)
     vol_zone: str = "Campus Coyoacán / Av. Universidad"
     vol_availability: str = "Lun-Vie 10:00 - 17:00"
     vol_notes: str = "Acompañamiento en cruces accesibles y traslado a clínicas"
@@ -509,7 +1019,7 @@ class AppState:
     vol_photo_name: Optional[str] = None
     vol_error: Optional[str] = None
 
-    # Protección para menores: ubicación en tiempo real + alarma sonora de extravío
+    # Protección para menores
     live_sharing_active: bool = False
     live_sharing_generation: int = 0
     last_location_shared_at: Optional[str] = None
@@ -525,8 +1035,12 @@ class AppState:
     refresh_generation: int = 0
 
 
-def build_face_avatar(photo_b64: Optional[str], size: int = 58, fallback_icon: Any = ft.Icons.PERSON) -> ft.Container:
-    """Muestra la foto real de rostro en avatar circular o un icono por defecto."""
+def build_face_avatar(
+    t: ThemePalette,
+    photo_b64: Optional[str],
+    size: int = 58,
+    fallback_icon: Any = ft.Icons.PERSON,
+) -> ft.Container:
     if photo_b64:
         try:
             raw_bytes = base64.b64decode(photo_b64)
@@ -534,14 +1048,9 @@ def build_face_avatar(photo_b64: Optional[str], size: int = 58, fallback_icon: A
                 width=size,
                 height=size,
                 border_radius=size // 2,
-                border=ft.Border.all(2, EMERALD_GREEN),
+                border=ft.Border.all(2, t.emerald),
                 clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                content=ft.Image(
-                    src=raw_bytes,
-                    width=size,
-                    height=size,
-                    fit=ft.BoxFit.COVER,
-                ),
+                content=ft.Image(src=raw_bytes, width=size, height=size, fit=ft.BoxFit.COVER),
             )
         except Exception:
             pass
@@ -550,27 +1059,30 @@ def build_face_avatar(photo_b64: Optional[str], size: int = 58, fallback_icon: A
         width=size,
         height=size,
         border_radius=size // 2,
-        bgcolor="#E5E7EB",
-        border=ft.Border.all(1.5, CARD_BORDER),
+        bgcolor=t.card_alt,
+        border=ft.Border.all(1.5, t.border),
         alignment=ft.Alignment.CENTER,
-        content=ft.Icon(fallback_icon, color=INDIGO_DARK, size=size // 2),
+        content=ft.Icon(fallback_icon, color=t.text_heading, size=size // 2),
     )
 
 
 def build_minimalist_map(
+    t: ThemePalette,
     *,
     show_route: bool,
     badge_text: str,
     show_clinics: bool = False,
     show_user_arrow: bool = False,
+    arrow_step: int = 0,
     height: int = 175,
 ) -> ft.Container:
+    """Mapa vectorial minimalista adaptado a Modo Día / Modo Noche con posición animada por paso."""
     layers: List[ft.Control] = [
-        ft.Container(left=0, right=0, top=46, height=12, bgcolor=ft.Colors.WHITE),
-        ft.Container(left=0, right=0, top=122, height=12, bgcolor=ft.Colors.WHITE),
-        ft.Container(top=0, bottom=0, left=92, width=12, bgcolor=ft.Colors.WHITE),
-        ft.Container(top=0, bottom=0, right=82, width=12, bgcolor=ft.Colors.WHITE),
-        ft.Container(left=126, top=20, width=74, height=74, border_radius=37, bgcolor="#D7EFE2"),
+        ft.Container(left=0, right=0, top=46, height=12, bgcolor=t.map_street),
+        ft.Container(left=0, right=0, top=122, height=12, bgcolor=t.map_street),
+        ft.Container(top=0, bottom=0, left=92, width=12, bgcolor=t.map_street),
+        ft.Container(top=0, bottom=0, right=82, width=12, bgcolor=t.map_street),
+        ft.Container(left=126, top=20, width=74, height=74, border_radius=37, bgcolor=t.map_park),
     ]
 
     if show_clinics:
@@ -582,7 +1094,7 @@ def build_minimalist_map(
                     width=32,
                     height=32,
                     border_radius=16,
-                    bgcolor=EMERALD_GREEN,
+                    bgcolor=t.emerald,
                     alignment=ft.Alignment.CENTER,
                     content=ft.Icon(ft.Icons.LOCAL_HOSPITAL, color=ft.Colors.WHITE, size=17),
                 )
@@ -591,37 +1103,46 @@ def build_minimalist_map(
     if show_route:
         layers.extend(
             [
-                ft.Container(left=98, top=46, width=148, height=8, border_radius=4, bgcolor=INDIGO_DARK),
-                ft.Container(left=238, top=46, width=8, height=84, border_radius=4, bgcolor=INDIGO_DARK),
-                ft.Container(left=132, top=122, width=114, height=8, border_radius=4, bgcolor=INDIGO_DARK),
+                ft.Container(left=98, top=46, width=148, height=8, border_radius=4, bgcolor=t.map_route),
+                ft.Container(left=238, top=46, width=8, height=84, border_radius=4, bgcolor=t.map_route),
+                ft.Container(left=132, top=122, width=114, height=8, border_radius=4, bgcolor=t.map_route),
+                # Bandera / meta en el destino
                 ft.Container(
-                    left=88,
-                    top=37,
-                    width=26,
-                    height=26,
-                    border_radius=13,
-                    bgcolor=INDIGO_DARK,
+                    left=86,
+                    top=35,
+                    width=28,
+                    height=28,
+                    border_radius=14,
+                    bgcolor=t.emerald,
                     alignment=ft.Alignment.CENTER,
-                    content=ft.Icon(ft.Icons.ACCESSIBLE, color=ft.Colors.WHITE, size=14),
+                    content=ft.Icon(ft.Icons.FLAG, color=ft.Colors.WHITE, size=15),
                 ),
             ]
         )
 
     if show_user_arrow:
+        # 4 posiciones reales a lo largo de la ruta conforme avanza la simulación
+        waypoints = [
+            (130, 108),  # Paso 1: inicio
+            (222, 108),  # Paso 2: esquina derecha
+            (222, 34),   # Paso 3: cruce superior
+            (92, 34),    # Paso 4: llegada al destino
+        ]
+        px, py = waypoints[min(max(arrow_step, 0), len(waypoints) - 1)]
         layers.append(
             ft.Container(
-                left=126,
-                top=108,
+                left=px,
+                top=py,
                 width=40,
                 height=40,
                 border_radius=20,
-                bgcolor="#BFDBFE",
+                bgcolor="#60A5FA" if t.is_dark else "#BFDBFE",
                 alignment=ft.Alignment.CENTER,
                 content=ft.Container(
                     width=26,
                     height=26,
                     border_radius=13,
-                    bgcolor=BLUE_ACTION,
+                    bgcolor=t.blue_action,
                     alignment=ft.Alignment.CENTER,
                     content=ft.Icon(ft.Icons.NAVIGATION, color=ft.Colors.WHITE, size=15),
                 ),
@@ -633,7 +1154,7 @@ def build_minimalist_map(
             ft.Container(
                 right=10,
                 top=10,
-                bgcolor=ALERT_ORANGE,
+                bgcolor=t.alert_orange,
                 border_radius=16,
                 padding=ft.Padding.symmetric(horizontal=10, vertical=5),
                 content=ft.Row(
@@ -650,8 +1171,9 @@ def build_minimalist_map(
     return ft.Container(
         height=height,
         width=float("inf"),
-        bgcolor="#EDF0F5",
+        bgcolor=t.map_bg,
         border_radius=16,
+        border=ft.Border.all(1, t.border),
         clip_behavior=ft.ClipBehavior.HARD_EDGE,
         content=ft.Stack(controls=layers),
     )
@@ -659,25 +1181,71 @@ def build_minimalist_map(
 
 def main(page: ft.Page) -> None:
     page.title = "Map Inclusive · Apex soa"
-    page.bgcolor = NEUTRAL_BG
     page.padding = 0
-    page.window.width = 430
-    page.window.height = 850
+    page.window.width = 435
+    page.window.height = 860
 
     state = AppState()
     file_picker = ft.FilePicker()
 
+    def t() -> ThemePalette:
+        return get_theme(state.dark_mode)
+
+    def apply_page_theme() -> None:
+        pal = t()
+        page.theme_mode = ft.ThemeMode.DARK if pal.is_dark else ft.ThemeMode.LIGHT
+        page.bgcolor = pal.bg
+
+    def toggle_dark_mode(_: Any = None) -> None:
+        state.dark_mode = not state.dark_mode
+        render()
+
+    def build_theme_toggle() -> ft.Container:
+        pal = t()
+        return ft.Container(
+            bgcolor=pal.card_alt,
+            border=ft.Border.all(1, pal.border),
+            border_radius=18,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=5),
+            ink=True,
+            on_click=toggle_dark_mode,
+            content=ft.Row(
+                tight=True,
+                spacing=4,
+                controls=[
+                    ft.Icon(
+                        ft.Icons.LIGHT_MODE if pal.is_dark else ft.Icons.DARK_MODE,
+                        color=pal.warn_text if pal.is_dark else pal.indigo,
+                        size=15,
+                    ),
+                    ft.Text(
+                        "Día" if pal.is_dark else "Noche",
+                        size=11,
+                        weight=ft.FontWeight.W_600,
+                        color=pal.text_primary,
+                    ),
+                ],
+            ),
+        )
+
     def show_info_dialog(title: str, message: str) -> None:
+        pal = t()
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(title, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-            content=ft.Text(message, size=13),
-            actions=[ft.TextButton(content="Entendido", on_click=lambda _: page.pop_dialog())],
+            bgcolor=pal.card_bg,
+            title=ft.Text(title, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+            content=ft.Text(message, size=13, color=pal.text_primary),
+            actions=[
+                ft.TextButton(
+                    content=ft.Text("Entendido", color=pal.blue_action, weight=ft.FontWeight.BOLD),
+                    on_click=lambda _: page.pop_dialog(),
+                )
+            ],
         )
         page.show_dialog(dialog)
 
     # -----------------------------------------------------------------------
-    # Selector de foto de rostro (usado opcional en Usuario y OBLIGATORIO en Voluntario)
+    # Selector de foto de rostro
     # -----------------------------------------------------------------------
     async def pick_face_photo(
         dialog_title: str,
@@ -697,7 +1265,7 @@ def main(page: ft.Page) -> None:
             if not raw_bytes and picked.path:
                 raw_bytes = Path(picked.path).read_bytes()
             if not raw_bytes:
-                show_info_dialog("Foto no leída", "No se pudo leer la imagen seleccionada. Intenta con otro archivo JPG o PNG.")
+                show_info_dialog("Foto no leída", "No se pudo leer la imagen seleccionada. Intenta con un JPG o PNG.")
                 return
             if len(raw_bytes) > 6 * 1024 * 1024:
                 show_info_dialog("Imagen muy pesada", "Elige una foto menor a 6 MB.")
@@ -706,6 +1274,68 @@ def main(page: ft.Page) -> None:
             on_picked(encoded, picked.name or "rostro.jpg")
         except Exception as exc:
             show_info_dialog("Selector de foto", f"No se pudo abrir el selector de imágenes: {exc}")
+
+    # -----------------------------------------------------------------------
+    # Simulación de navegación paso a paso + VOZ en español (adaptada por discapacidad)
+    # -----------------------------------------------------------------------
+    def get_active_nav_steps() -> List[Dict[str, Any]]:
+        steps = state.current_route.get("navigation_steps")
+        if isinstance(steps, list) and steps:
+            return steps
+        return build_local_navigation_steps(state.destination, state.disabilities)
+
+    def is_auditory_profile_active() -> bool:
+        return "auditivo" in state.disabilities
+
+    async def speak_current_step() -> None:
+        if not state.voice_enabled or is_auditory_profile_active():
+            return
+        steps = get_active_nav_steps()
+        idx = min(max(state.nav_step_index, 0), len(steps) - 1)
+        spoken = str(steps[idx].get("spoken_text") or "").strip()
+        if spoken:
+            await asyncio.to_thread(speak_spanish_instruction, spoken)
+
+    async def navigation_simulation_loop(generation: int) -> None:
+        """Avanza automáticamente los pasos de navegación simulada y dicta cada paso por voz."""
+        while state.nav_sim_running and state.nav_sim_generation == generation and state.screen == "active":
+            await speak_current_step()
+            steps = get_active_nav_steps()
+            if state.nav_step_index >= len(steps) - 1:
+                state.nav_sim_running = False
+                render()
+                break
+            await asyncio.sleep(SIMULATION_STEP_INTERVAL_SECONDS)
+            if not (state.nav_sim_running and state.nav_sim_generation == generation and state.screen == "active"):
+                break
+            state.nav_step_index = min(state.nav_step_index + 1, len(steps) - 1)
+            render()
+
+    def start_nav_simulation() -> None:
+        steps = get_active_nav_steps()
+        if state.nav_step_index >= len(steps) - 1:
+            state.nav_step_index = 0
+        state.nav_sim_running = True
+        state.nav_sim_generation += 1
+        gen = state.nav_sim_generation
+        render()
+        page.run_task(navigation_simulation_loop, gen)
+
+    def pause_nav_simulation() -> None:
+        state.nav_sim_running = False
+        state.nav_sim_generation += 1
+        stop_voice_speech()
+        render()
+
+    def advance_nav_step() -> None:
+        steps = get_active_nav_steps()
+        if state.nav_step_index < len(steps) - 1:
+            state.nav_step_index += 1
+        else:
+            state.nav_step_index = 0
+        render()
+        if state.voice_enabled and not is_auditory_profile_active():
+            page.run_task(speak_current_step)
 
     # -----------------------------------------------------------------------
     # Protección de menores: ubicación en tiempo real + alarma sonora de extravío
@@ -721,7 +1351,6 @@ def main(page: ft.Page) -> None:
         guardian = state.current_user["guardian"]
         contact = guardian.get("phone") or guardian.get("email") or "familiar registrado"
         now_local = datetime.now().strftime("%H:%M:%S")
-
         payload = {
             "user_id": state.current_user["id"],
             "username": state.current_user["username"],
@@ -739,9 +1368,7 @@ def main(page: ft.Page) -> None:
                 if resp.status_code < 300:
                     state.last_location_status = resp.json().get("message")
         except Exception:
-            state.last_location_status = (
-                f"Ubicación compartida en tiempo real con {guardian['name']} ({contact})."
-            )
+            state.last_location_status = f"Ubicación compartida en tiempo real con {guardian['name']} ({contact})."
         state.last_location_shared_at = now_local
         render()
 
@@ -778,6 +1405,7 @@ def main(page: ft.Page) -> None:
         render()
 
     async def activate_lost_minor_alarm() -> None:
+        stop_voice_speech()
         state.lost_alarm_active = True
         state.lost_alarm_generation += 1
         gen = state.lost_alarm_generation
@@ -789,7 +1417,6 @@ def main(page: ft.Page) -> None:
         g_phone = guardian.get("phone") or "911"
         g_email = guardian.get("email") or ""
 
-        # Inicia el sonido real de alerta de inmediato
         page.run_task(lost_sound_loop, gen)
 
         helper_msg = (
@@ -801,7 +1428,6 @@ def main(page: ft.Page) -> None:
             + "\n• Emergencias: 911"
         )
 
-        # Notifica al backend + envía ubicación actual como "extraviado"
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
@@ -824,19 +1450,15 @@ def main(page: ft.Page) -> None:
         if is_minor_with_guardian():
             page.run_task(send_guardian_location_once, "extraviado")
 
+        pal = t()
         alarm_dialog = ft.AlertDialog(
             modal=True,
-            bgcolor=DANGER_SURFACE,
+            bgcolor=pal.danger_bg,
             title=ft.Row(
                 spacing=8,
                 controls=[
-                    ft.Icon(ft.Icons.CAMPAIGN, color=DANGER_RED, size=30),
-                    ft.Text(
-                        "¡ALARMA SONORA ACTIVA!",
-                        weight=ft.FontWeight.BOLD,
-                        color=DANGER_RED,
-                        size=18,
-                    ),
+                    ft.Icon(ft.Icons.CAMPAIGN, color=pal.danger_red, size=28),
+                    ft.Text("¡ALARMA SONORA ACTIVA!", weight=ft.FontWeight.BOLD, color=pal.danger_text, size=17),
                 ],
             ),
             content=ft.Column(
@@ -844,13 +1466,13 @@ def main(page: ft.Page) -> None:
                 spacing=10,
                 controls=[
                     ft.Container(
-                        bgcolor=DANGER_RED,
+                        bgcolor=pal.danger_red,
                         border_radius=12,
                         padding=12,
                         content=ft.Row(
                             spacing=8,
                             controls=[
-                                ft.Icon(ft.Icons.VOLUME_UP, color=ft.Colors.WHITE, size=24),
+                                ft.Icon(ft.Icons.VOLUME_UP, color=ft.Colors.WHITE, size=22),
                                 ft.Text(
                                     "Emitiendo sonido fuerte para alertar a personas cercanas...",
                                     color=ft.Colors.WHITE,
@@ -861,14 +1483,14 @@ def main(page: ft.Page) -> None:
                             ],
                         ),
                     ),
-                    ft.Text(helper_msg, size=14, weight=ft.FontWeight.W_600, color="#7F1D1D"),
+                    ft.Text(helper_msg, size=14, weight=ft.FontWeight.W_600, color=pal.danger_text),
                 ],
             ),
             actions=[
                 ft.FilledButton(
                     content="Detener alarma sonora",
                     icon=ft.Icons.STOP_CIRCLE,
-                    bgcolor=INDIGO_DARK,
+                    bgcolor=pal.indigo,
                     color=ft.Colors.WHITE,
                     on_click=stop_lost_alarm,
                 )
@@ -878,9 +1500,10 @@ def main(page: ft.Page) -> None:
         render()
 
     # -----------------------------------------------------------------------
-    # Botón y diálogo de Emergencia SOS
+    # Emergencia SOS
     # -----------------------------------------------------------------------
     def open_emergency_dialog(_: Any = None) -> None:
+        pal = t()
         dis_label = format_disabilities_label(state.disabilities)
 
         async def send_sos() -> None:
@@ -921,11 +1544,12 @@ def main(page: ft.Page) -> None:
 
         dialog = ft.AlertDialog(
             modal=True,
+            bgcolor=pal.card_bg,
             title=ft.Row(
                 spacing=8,
                 controls=[
-                    ft.Icon(ft.Icons.EMERGENCY, color=DANGER_RED, size=26),
-                    ft.Text("Emergencia SOS", weight=ft.FontWeight.BOLD, color=DANGER_RED),
+                    ft.Icon(ft.Icons.EMERGENCY, color=pal.danger_red, size=26),
+                    ft.Text("Emergencia SOS", weight=ft.FontWeight.BOLD, color=pal.danger_red),
                 ],
             ),
             content=ft.Column(
@@ -936,10 +1560,10 @@ def main(page: ft.Page) -> None:
                         f"Discapacidades: {dis_label}\nUbicación: {state.origin}",
                         size=13,
                         weight=ft.FontWeight.W_600,
-                        color=INDIGO_DARK,
+                        color=pal.text_primary,
                     ),
                     ft.Container(
-                        bgcolor=DANGER_SURFACE,
+                        bgcolor=pal.danger_bg,
                         border_radius=10,
                         padding=10,
                         content=ft.Text(
@@ -948,24 +1572,28 @@ def main(page: ft.Page) -> None:
                             "• 55 5658 1111 — LOCATEL CDMX\n"
                             "• Urgencias cercanas: Hospital General Xoco (24h)",
                             size=12,
-                            color="#7F1D1D",
+                            color=pal.danger_text,
                         ),
                     ),
-                    ft.OutlinedButton(
-                        content="Me extravié · Activar alarma sonora",
+                    styled_outlined_button(
+                        pal,
+                        text="Me extravié · Activar alarma sonora",
                         icon=ft.Icons.VOLUME_UP,
-                        icon_color=ALERT_ORANGE,
+                        icon_color=pal.alert_orange,
                         width=float("inf"),
                         on_click=trigger_lost_from_sos,
                     ),
                 ],
             ),
             actions=[
-                ft.TextButton(content="Cancelar", on_click=lambda _: page.pop_dialog()),
+                ft.TextButton(
+                    content=ft.Text("Cancelar", color=pal.text_muted),
+                    on_click=lambda _: page.pop_dialog(),
+                ),
                 ft.FilledButton(
                     content="Enviar Alerta SOS",
                     icon=ft.Icons.SOS,
-                    bgcolor=DANGER_RED,
+                    bgcolor=pal.danger_red,
                     color=ft.Colors.WHITE,
                     on_click=lambda _: page.run_task(send_sos),
                 ),
@@ -974,8 +1602,9 @@ def main(page: ft.Page) -> None:
         page.show_dialog(dialog)
 
     def build_sos_pill() -> ft.Container:
+        pal = t()
         return ft.Container(
-            bgcolor=DANGER_RED,
+            bgcolor=pal.danger_red,
             border_radius=18,
             padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             ink=True,
@@ -991,10 +1620,225 @@ def main(page: ft.Page) -> None:
         )
 
     # -----------------------------------------------------------------------
-    # Sincronización con Backend Python (rutas multi-discapacidad, clínicas, historial, voluntarios)
+    # Reporte de incidencias estilo WAZE ("¿Qué ves?") — BottomSheet visual 3x3
+    # -----------------------------------------------------------------------
+    def open_waze_report_sheet(_: Any = None) -> None:
+        pal = t()
+        selected_cat_ref: Dict[str, WazeIncidentCategory] = {
+            "cat": next(
+                (c for c in WAZE_INCIDENT_CATEGORIES if c.id == state.waze_selected_id),
+                WAZE_INCIDENT_CATEGORIES[0],
+            )
+        }
+
+        banner_title_txt = ft.Text(
+            f"Seleccionado: {selected_cat_ref['cat'].title}",
+            size=13,
+            weight=ft.FontWeight.BOLD,
+            color="#0F172A",
+        )
+        banner_sub_txt = ft.Text(
+            selected_cat_ref["cat"].default_desc,
+            size=11,
+            color="#334155",
+        )
+        submit_btn_label = ft.Text(
+            f"Enviar reporte: {selected_cat_ref['cat'].title}",
+            color=ft.Colors.WHITE,
+            weight=ft.FontWeight.BOLD,
+            size=14,
+        )
+
+        location_input = styled_text_field(
+            pal,
+            label="Ubicación del reporte",
+            value=state.waze_location,
+            prefix_icon=ft.Icons.LOCATION_ON,
+            on_change=lambda e: setattr(state, "waze_location", e.control.value or ""),
+        )
+        notes_input = styled_text_field(
+            pal,
+            label="Detalle rápido (opcional)",
+            hint_text="Ej. Esquina norte junto al cruce...",
+            value=state.waze_notes,
+            on_change=lambda e: setattr(state, "waze_notes", e.control.value or ""),
+        )
+
+        tile_containers: Dict[str, ft.Container] = {}
+
+        def select_category(cat: WazeIncidentCategory) -> None:
+            state.waze_selected_id = cat.id
+            selected_cat_ref["cat"] = cat
+            banner_title_txt.value = f"Seleccionado: {cat.title}"
+            banner_sub_txt.value = cat.default_desc
+            submit_btn_label.value = f"Enviar reporte: {cat.title}"
+            for cid, box in tile_containers.items():
+                is_active = cid == cat.id
+                box.border = ft.Border.all(2.5 if is_active else 1, cat.color if is_active else pal.border)
+                box.bgcolor = pal.badge_bg if is_active else pal.card_alt
+            page.update()
+
+        grid_rows: List[ft.Row] = []
+        for row_start in range(0, len(WAZE_INCIDENT_CATEGORIES), 3):
+            row_items = WAZE_INCIDENT_CATEGORIES[row_start : row_start + 3]
+            row_controls: List[ft.Control] = []
+            for cat in row_items:
+                is_active = cat.id == selected_cat_ref["cat"].id
+                circle_tile = ft.Container(
+                    expand=True,
+                    bgcolor=pal.badge_bg if is_active else pal.card_alt,
+                    border=ft.Border.all(2.5 if is_active else 1, cat.color if is_active else pal.border),
+                    border_radius=16,
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=10),
+                    ink=True,
+                    on_click=lambda _, c=cat: select_category(c),
+                    content=ft.Column(
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=6,
+                        controls=[
+                            ft.Container(
+                                width=52,
+                                height=52,
+                                border_radius=26,
+                                bgcolor=cat.color,
+                                alignment=ft.Alignment.CENTER,
+                                content=ft.Icon(cat.icon, color=ft.Colors.WHITE, size=26),
+                            ),
+                            ft.Text(
+                                cat.short_label,
+                                size=11,
+                                weight=ft.FontWeight.W_600,
+                                color=pal.text_primary,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                        ],
+                    ),
+                )
+                tile_containers[cat.id] = circle_tile
+                row_controls.append(circle_tile)
+            grid_rows.append(ft.Row(spacing=10, controls=row_controls))
+
+        async def submit_waze_report() -> None:
+            cat = selected_cat_ref["cat"]
+            title_val = cat.title
+            loc_val = (state.waze_location or "Av. Universidad, Coyoacán").strip()
+            desc_val = (state.waze_notes or cat.default_desc).strip()
+            reporter = state.current_user["username"] if state.current_user else "Usuario Map Inclusive"
+            state.waze_notes = ""
+            page.pop_dialog()
+
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post(
+                        f"{state.api_url}/api/v1/incidents",
+                        json={
+                            "title": title_val,
+                            "description": desc_val,
+                            "location": loc_val,
+                            "profile": state.disabilities[0],
+                            "disabilities": state.disabilities,
+                            "reported_by": reporter,
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    state.incidents.insert(0, data)
+                    show_info_dialog(
+                        f"¡Gracias! Reporte enviado ({data.get('severity', 'medio').upper()})",
+                        f"{title_val} en {loc_val}\n\nConsejo de Gemini:\n{data.get('ai_advice', '')}",
+                    )
+                    if state.screen in ("route", "active"):
+                        await refresh_environment(force=True)
+                    else:
+                        render()
+            except Exception:
+                local_inc = {
+                    "id": f"inc-{uuid.uuid4().hex[:6]}",
+                    "title": title_val,
+                    "description": desc_val,
+                    "location": loc_val,
+                    "disabilities": list(state.disabilities),
+                    "disabilities_labels": [get_profile(d).label for d in state.disabilities],
+                    "reported_by": reporter,
+                    "severity": "alto" if cat.id in ("rampa_bloqueada", "zona_peligrosa", "calle_cerrada") else "medio",
+                    "ai_advice": f"Precaución cerca de {loc_val}; alerta visible en el historial comunitario.",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                state.incidents.insert(0, local_inc)
+                show_info_dialog("Reporte agregado al historial", f"Se registró '{title_val}' en {loc_val}.")
+                render()
+
+        sheet = ft.BottomSheet(
+            bgcolor=pal.card_bg,
+            show_drag_handle=True,
+            scrollable=True,
+            content=ft.Container(
+                padding=ft.Padding.only(left=18, right=18, top=6, bottom=22),
+                content=ft.Column(
+                    tight=True,
+                    spacing=12,
+                    controls=[
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                ft.Text("¿Qué ves?", size=21, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                ft.IconButton(
+                                    icon=ft.Icons.CLOSE,
+                                    icon_color=pal.text_muted,
+                                    on_click=lambda _: page.pop_dialog(),
+                                ),
+                            ],
+                        ),
+                        # Píldora degradada estilo Waze con estado seleccionado
+                        ft.Container(
+                            width=float("inf"),
+                            border_radius=14,
+                            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                            gradient=ft.LinearGradient(
+                                begin=ft.Alignment.CENTER_LEFT,
+                                end=ft.Alignment.CENTER_RIGHT,
+                                colors=["#DDD6FE", "#BAE6FD"],
+                            ),
+                            content=ft.Row(
+                                spacing=10,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=[
+                                    ft.Icon(ft.Icons.MIC, color="#1E3A8A", size=22),
+                                    ft.Column(
+                                        expand=True,
+                                        spacing=2,
+                                        controls=[banner_title_txt, banner_sub_txt],
+                                    ),
+                                ],
+                            ),
+                        ),
+                        # Cuadrícula visual 3x3 de íconos estilo Waze
+                        *grid_rows,
+                        location_input,
+                        notes_input,
+                        ft.FilledButton(
+                            content=submit_btn_label,
+                            icon=ft.Icons.FLAG,
+                            bgcolor=pal.blue_action,
+                            color=ft.Colors.WHITE,
+                            width=float("inf"),
+                            height=48,
+                            on_click=lambda _: page.run_task(submit_waze_report),
+                        ),
+                    ],
+                ),
+            ),
+        )
+        page.show_dialog(sheet)
+
+    # -----------------------------------------------------------------------
+    # Sincronización con Backend Python
     # -----------------------------------------------------------------------
     async def sync_routes_and_clinics() -> None:
         state.disabilities = normalize_disabilities(state.disabilities)
+        # Si se selecciona perfil auditivo, la voz se desactiva automáticamente
+        state.voice_enabled = "auditivo" not in state.disabilities
         profiles_csv = ",".join(state.disabilities)
 
         state.suggestions = build_local_suggestions(state.disabilities)
@@ -1013,17 +1857,11 @@ def main(page: ft.Page) -> None:
 
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
-                s_resp = await client.get(
-                    f"{state.api_url}/api/v1/routes/suggestions",
-                    params={"profiles": profiles_csv},
-                )
+                s_resp = await client.get(f"{state.api_url}/api/v1/routes/suggestions", params={"profiles": profiles_csv})
                 if s_resp.status_code == 200:
                     state.suggestions = s_resp.json()
 
-                c_resp = await client.get(
-                    f"{state.api_url}/api/v1/clinics",
-                    params={"profiles": profiles_csv},
-                )
+                c_resp = await client.get(f"{state.api_url}/api/v1/clinics", params={"profiles": profiles_csv})
                 if c_resp.status_code == 200:
                     state.clinics = c_resp.json()
 
@@ -1041,12 +1879,10 @@ def main(page: ft.Page) -> None:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(f"{state.api_url}/api/v1/incidents")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, list):
-                        state.incidents = data
-                        if state.screen == "incidents":
-                            render()
+                if resp.status_code == 200 and isinstance(resp.json(), list):
+                    state.incidents = resp.json()
+                    if state.screen == "incidents":
+                        render()
         except Exception:
             pass
 
@@ -1077,10 +1913,7 @@ def main(page: ft.Page) -> None:
         }
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
-                resp = await client.post(
-                    f"{state.api_url}/api/v1/environment-check",
-                    json=payload,
-                )
+                resp = await client.post(f"{state.api_url}/api/v1/environment-check", json=payload)
                 resp.raise_for_status()
                 state.env_report = resp.json()
         except Exception as exc:
@@ -1107,6 +1940,7 @@ def main(page: ft.Page) -> None:
         state.destination = destination_name.strip() or "Clínica 19 (UMF IMSS)"
         if route_item is not None:
             state.current_route = route_item
+        state.nav_step_index = 0
         state.screen = "route"
         render()
         start_route_monitoring()
@@ -1115,12 +1949,12 @@ def main(page: ft.Page) -> None:
         current = list(state.disabilities)
         if prof_value in current:
             if len(current) == 1:
-                # Siempre debe haber al menos una discapacidad seleccionada
                 return
             current.remove(prof_value)
         else:
             current.append(prof_value)
         state.disabilities = normalize_disabilities(current)
+        state.voice_enabled = "auditivo" not in state.disabilities
 
         if state.current_user is not None:
             state.current_user["disabilities"] = list(state.disabilities)
@@ -1142,98 +1976,6 @@ def main(page: ft.Page) -> None:
         await sync_routes_and_clinics()
         if state.screen in ("route", "active"):
             await refresh_environment(force=True)
-
-    # -----------------------------------------------------------------------
-    # Reporte de incidencias (se guarda en el historial y se clasifica con Gemini)
-    # -----------------------------------------------------------------------
-    def open_report_incident_dialog(_: Any = None) -> None:
-        title_field = ft.TextField(label="Título de la incidencia", value="Rampa bloqueada")
-        location_field = ft.TextField(label="Ubicación", value="Av. Universidad, Coyoacán")
-        desc_field = ft.TextField(
-            label="Descripción",
-            value="Vehículo bloqueando la rampa peatonal en esquina",
-            multiline=True,
-        )
-
-        async def submit_incident() -> None:
-            title_val = (title_field.value or "Incidencia reportada").strip()
-            loc_val = (location_field.value or "Av. Universidad, Coyoacán").strip()
-            desc_val = (desc_field.value or "").strip()
-            reporter = state.current_user["username"] if state.current_user else "Usuario Map Inclusive"
-            page.pop_dialog()
-
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.post(
-                        f"{state.api_url}/api/v1/incidents",
-                        json={
-                            "title": title_val,
-                            "description": desc_val,
-                            "location": loc_val,
-                            "profile": state.disabilities[0],
-                            "disabilities": state.disabilities,
-                            "reported_by": reporter,
-                        },
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    state.incidents.insert(0, data)
-                    show_info_dialog(
-                        f"Incidencia registrada ({data.get('severity', 'medio').upper()})",
-                        f"Agregada al historial.\n\nConsejo de Gemini:\n{data.get('ai_advice', '')}",
-                    )
-                    if state.screen in ("route", "active"):
-                        await refresh_environment(force=True)
-                    else:
-                        render()
-            except Exception:
-                local_inc = {
-                    "id": f"inc-{uuid.uuid4().hex[:6]}",
-                    "title": title_val,
-                    "description": desc_val,
-                    "location": loc_val,
-                    "disabilities": list(state.disabilities),
-                    "disabilities_labels": [get_profile(d).label for d in state.disabilities],
-                    "reported_by": reporter,
-                    "severity": "alto" if "bloque" in title_val.lower() else "medio",
-                    "ai_advice": f"Precaución cerca de {loc_val}; guardado en el historial local.",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                state.incidents.insert(0, local_inc)
-                show_info_dialog(
-                    "Incidencia guardada en el historial",
-                    f"Se registró '{title_val}' localmente (sin conexión al servidor).",
-                )
-                render()
-
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Reportar incidencia", weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-            content=ft.Column(
-                tight=True,
-                spacing=10,
-                controls=[
-                    ft.Text(
-                        f"Afecta a: {format_disabilities_label(state.disabilities)}",
-                        size=12,
-                        color=TEXT_MUTED,
-                    ),
-                    title_field,
-                    location_field,
-                    desc_field,
-                ],
-            ),
-            actions=[
-                ft.TextButton(content="Cancelar", on_click=lambda _: page.pop_dialog()),
-                ft.FilledButton(
-                    content="Enviar reporte",
-                    bgcolor=BLUE_ACTION,
-                    color=ft.Colors.WHITE,
-                    on_click=lambda _: page.run_task(submit_incident),
-                ),
-            ],
-        )
-        page.show_dialog(dialog)
 
     async def request_volunteer() -> None:
         try:
@@ -1273,9 +2015,11 @@ def main(page: ft.Page) -> None:
                 )
 
     # -----------------------------------------------------------------------
-    # Barra inferior de navegación (Mapa | Incidencias | Clínicas | Voluntarios | Perfil)
+    # Barra inferior de navegación (adaptada a Modo Día y Modo Noche)
     # -----------------------------------------------------------------------
     def build_bottom_nav(selected_index: int) -> ft.NavigationBar:
+        pal = t()
+
         def on_nav_change(e: ft.ControlEvent) -> None:
             idx = e.control.selected_index
             if idx == 0:
@@ -1303,7 +2047,8 @@ def main(page: ft.Page) -> None:
 
         return ft.NavigationBar(
             selected_index=selected_index,
-            bgcolor=ft.Colors.WHITE,
+            bgcolor=pal.nav_bg,
+            indicator_color=pal.badge_bg,
             on_change=on_nav_change,
             destinations=[
                 ft.NavigationBarDestination(icon=ft.Icons.MAP, label="Mapa"),
@@ -1314,7 +2059,8 @@ def main(page: ft.Page) -> None:
             ],
         )
 
-    def build_multi_disability_chips(on_toggle_fn: Optional[Callable[[str], None]] = None) -> ft.Row:
+    def build_multi_disability_chips() -> ft.Row:
+        pal = t()
         return ft.Row(
             wrap=True,
             spacing=8,
@@ -1324,55 +2070,48 @@ def main(page: ft.Page) -> None:
                     label=ft.Text(
                         p.short_label,
                         size=12,
-                        color=ft.Colors.WHITE if p.api_value in state.disabilities else INDIGO_DARK,
+                        weight=ft.FontWeight.W_600,
+                        color=pal.chip_active_text if p.api_value in state.disabilities else pal.chip_idle_text,
                     ),
                     selected=p.api_value in state.disabilities,
-                    selected_color=INDIGO_DARK,
-                    bgcolor=ft.Colors.WHITE,
+                    selected_color=pal.chip_active_bg,
+                    bgcolor=pal.chip_idle_bg,
                     show_checkmark=True,
-                    check_color=ft.Colors.WHITE,
-                    on_select=lambda _, pv=p.api_value: (
-                        on_toggle_fn(pv) if on_toggle_fn else page.run_task(toggle_disability, pv)
-                    ),
+                    check_color=pal.chip_active_text,
+                    on_select=lambda _, pv=p.api_value: page.run_task(toggle_disability, pv),
                 )
                 for p in PROFILES
             ],
         )
 
     # =======================================================================
-    # PANTALLA 1: PANTALLA INICIAL (Multi-selección de discapacidades)
+    # PANTALLA 1: PANTALLA INICIAL
     # =======================================================================
     def build_onboarding_screen() -> ft.Control:
+        pal = t()
+
         def profile_tile(option: ProfileOption, full_width: bool = False) -> ft.Container:
             is_selected = option.api_value in state.disabilities
-
-            def on_tile_click(_: ft.ControlEvent) -> None:
-                page.run_task(toggle_disability, option.api_value)
-
-            fg = ft.Colors.WHITE if is_selected else INDIGO_DARK
-            bg = INDIGO_DARK if is_selected else ft.Colors.WHITE
-            border_color = INDIGO_DARK if is_selected else CARD_BORDER
+            fg = pal.chip_active_text if is_selected else pal.text_primary
+            bg = pal.chip_active_bg if is_selected else pal.card_bg
+            bc = pal.chip_active_bg if is_selected else pal.border
 
             if full_width:
                 return ft.Container(
                     height=62,
                     bgcolor=bg,
-                    border=ft.Border.all(1.5, border_color),
+                    border=ft.Border.all(1.5, bc),
                     border_radius=16,
                     alignment=ft.Alignment.CENTER,
                     ink=True,
-                    on_click=on_tile_click,
+                    on_click=lambda _: page.run_task(toggle_disability, option.api_value),
                     content=ft.Row(
                         alignment=ft.MainAxisAlignment.CENTER,
                         spacing=10,
                         controls=[
                             ft.Icon(option.icon, color=fg, size=24),
                             ft.Text(option.label, color=fg, size=14, weight=ft.FontWeight.W_600),
-                            *(
-                                [ft.Icon(ft.Icons.CHECK_CIRCLE, color=EMERALD_SURFACE, size=18)]
-                                if is_selected
-                                else []
-                            ),
+                            *([ft.Icon(ft.Icons.CHECK_CIRCLE, color=pal.emerald_bg, size=18)] if is_selected else []),
                         ],
                     ),
                 )
@@ -1381,36 +2120,27 @@ def main(page: ft.Page) -> None:
                 expand=True,
                 height=108,
                 bgcolor=bg,
-                border=ft.Border.all(1.5, border_color),
+                border=ft.Border.all(1.5, bc),
                 border_radius=16,
                 padding=10,
                 alignment=ft.Alignment.CENTER,
                 ink=True,
-                on_click=on_tile_click,
+                on_click=lambda _: page.run_task(toggle_disability, option.api_value),
                 content=ft.Column(
                     alignment=ft.MainAxisAlignment.CENTER,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=6,
                     controls=[
                         ft.Icon(option.icon, color=fg, size=30),
-                        ft.Text(
-                            option.label,
-                            color=fg,
-                            size=13,
-                            weight=ft.FontWeight.W_600,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
+                        ft.Text(option.label, color=fg, size=13, weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
                     ],
                 ),
             )
 
-        selected_count = len(state.disabilities)
-        selected_summary = format_disabilities_label(state.disabilities)
-
         return ft.Container(
             expand=True,
-            bgcolor=ft.Colors.WHITE,
-            padding=ft.Padding.symmetric(horizontal=20, vertical=18),
+            bgcolor=pal.bg,
+            padding=ft.Padding.symmetric(horizontal=18, vertical=18),
             content=ft.Column(
                 expand=True,
                 scroll=ft.ScrollMode.AUTO,
@@ -1428,32 +2158,27 @@ def main(page: ft.Page) -> None:
                                         width=34,
                                         height=34,
                                         border_radius=17,
-                                        bgcolor=EMERALD_GREEN,
+                                        bgcolor=pal.emerald,
                                         alignment=ft.Alignment.CENTER,
                                         content=ft.Icon(ft.Icons.ACCESSIBLE, color=ft.Colors.WHITE, size=19),
                                     ),
                                     ft.Column(
                                         spacing=0,
                                         controls=[
-                                            ft.Text("map inclusive", size=20, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                            ft.Text("Campus Coyoacán · Apex soa", size=11, color=TEXT_MUTED),
+                                            ft.Text("map inclusive", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                            ft.Text("Campus Coyoacán · Apex soa", size=11, color=pal.text_muted),
                                         ],
                                     ),
                                 ],
                             ),
-                            build_sos_pill(),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
+                    ft.Text("¿Cómo te desplazas hoy?", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                     ft.Text(
-                        "¿Cómo te desplazas hoy?",
-                        size=20,
-                        weight=ft.FontWeight.W_600,
-                        color=INDIGO_DARK,
-                    ),
-                    ft.Text(
-                        "Puedes elegir UNA O MÁS discapacidades; combinaremos todas tus necesidades en la ruta.",
+                        "Elige una o varias discapacidades; las rutas e instrucciones (por voz o visuales) se adaptarán a ti.",
                         size=12,
-                        color=TEXT_MUTED,
+                        color=pal.text_muted,
                         text_align=ft.TextAlign.CENTER,
                     ),
                     ft.Row(spacing=12, controls=[profile_tile(PROFILES[0]), profile_tile(PROFILES[1])]),
@@ -1461,19 +2186,24 @@ def main(page: ft.Page) -> None:
                     profile_tile(PROFILES[4], full_width=True),
                     ft.Container(
                         width=float("inf"),
-                        bgcolor=EMERALD_SURFACE,
+                        bgcolor=pal.emerald_bg,
                         border_radius=12,
                         padding=10,
                         content=ft.Text(
-                            f"Seleccionadas ({selected_count}): {selected_summary}",
+                            f"Seleccionadas ({len(state.disabilities)}): {format_disabilities_label(state.disabilities)}"
+                            + (
+                                "\nModo Visual activo (sin depender de audio)."
+                                if is_auditory_profile_active()
+                                else "\nGuía por voz en español habilitada."
+                            ),
                             size=12,
                             weight=ft.FontWeight.W_600,
-                            color="#065F46",
+                            color=pal.emerald_text,
                         ),
                     ),
                     ft.FilledButton(
                         content="Continuar al mapa",
-                        bgcolor=BLUE_ACTION,
+                        bgcolor=pal.blue_action,
                         color=ft.Colors.WHITE,
                         width=float("inf"),
                         height=48,
@@ -1483,8 +2213,9 @@ def main(page: ft.Page) -> None:
                             page.run_task(sync_routes_and_clinics),
                         ),
                     ),
-                    ft.OutlinedButton(
-                        content=(
+                    styled_outlined_button(
+                        pal,
+                        text=(
                             f"Mi Perfil ({state.current_user['username']})"
                             if state.current_user
                             else "Crear perfil / Iniciar sesión"
@@ -1502,13 +2233,13 @@ def main(page: ft.Page) -> None:
     # PANTALLA 2: EXPLORAR RUTAS (Lista vertical con tiempo estimado)
     # =======================================================================
     def build_search_screen() -> ft.Control:
+        pal = t()
         dis_label = format_disabilities_label(state.disabilities)
-        search_input = ft.TextField(
-            value=state.search_query,
+        search_input = styled_text_field(
+            pal,
             hint_text="Buscar destino...",
+            value=state.search_query,
             prefix_icon=ft.Icons.SEARCH,
-            border_radius=14,
-            bgcolor=ft.Colors.WHITE,
             expand=True,
             on_change=lambda e: setattr(state, "search_query", e.control.value or ""),
         )
@@ -1524,7 +2255,7 @@ def main(page: ft.Page) -> None:
         for idx, item in enumerate(state.suggestions):
             is_health = "Clínica" in item["category"] or "Hospital" in item["category"]
             row_tile = ft.Container(
-                bgcolor=ft.Colors.WHITE,
+                bgcolor=pal.card_bg,
                 padding=ft.Padding.symmetric(horizontal=14, vertical=12),
                 ink=True,
                 on_click=lambda _, r=item: go_to_route(r["destination"], r),
@@ -1536,11 +2267,11 @@ def main(page: ft.Page) -> None:
                             width=38,
                             height=38,
                             border_radius=10,
-                            bgcolor=EMERALD_SURFACE if is_health else "#E0E7FF",
+                            bgcolor=pal.emerald_bg if is_health else pal.badge_bg,
                             alignment=ft.Alignment.CENTER,
                             content=ft.Icon(
                                 category_icon(item["category"]),
-                                color=EMERALD_GREEN if is_health else INDIGO_DARK,
+                                color=pal.emerald_text if is_health else pal.badge_text,
                                 size=20,
                             ),
                         ),
@@ -1548,22 +2279,13 @@ def main(page: ft.Page) -> None:
                             expand=True,
                             spacing=2,
                             controls=[
-                                ft.Text(
-                                    item["destination"],
-                                    size=14,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=INDIGO_DARK,
-                                ),
-                                ft.Text(
-                                    f"{item['address']} · {item['distance_text']}",
-                                    size=12,
-                                    color=TEXT_MUTED,
-                                ),
+                                ft.Text(item["destination"], size=14, weight=ft.FontWeight.BOLD, color=pal.text_primary),
+                                ft.Text(f"{item['address']} · {item['distance_text']}", size=12, color=pal.text_muted),
                                 ft.Text(
                                     item["route_name"].split("·")[0].strip(),
                                     size=11,
-                                    color=EMERALD_GREEN,
-                                    weight=ft.FontWeight.W_500,
+                                    color=pal.emerald,
+                                    weight=ft.FontWeight.W_600,
                                 ),
                             ],
                         ),
@@ -1572,24 +2294,24 @@ def main(page: ft.Page) -> None:
                             spacing=2,
                             controls=[
                                 ft.Container(
-                                    bgcolor="#EEF2FF",
+                                    bgcolor=pal.badge_bg,
                                     border_radius=10,
                                     padding=ft.Padding.symmetric(horizontal=8, vertical=4),
                                     content=ft.Row(
                                         tight=True,
                                         spacing=4,
                                         controls=[
-                                            ft.Icon(ft.Icons.ACCESS_TIME, size=13, color=INDIGO_DARK),
+                                            ft.Icon(ft.Icons.ACCESS_TIME, size=13, color=pal.badge_text),
                                             ft.Text(
                                                 f"{item['estimated_minutes']} min",
                                                 size=12,
                                                 weight=ft.FontWeight.BOLD,
-                                                color=INDIGO_DARK,
+                                                color=pal.badge_text,
                                             ),
                                         ],
                                     ),
                                 ),
-                                ft.Icon(ft.Icons.CHEVRON_RIGHT, size=18, color=TEXT_MUTED),
+                                ft.Icon(ft.Icons.CHEVRON_RIGHT, size=18, color=pal.text_muted),
                             ],
                         ),
                     ],
@@ -1597,7 +2319,7 @@ def main(page: ft.Page) -> None:
             )
             suggestion_rows.append(row_tile)
             if idx < len(state.suggestions) - 1:
-                suggestion_rows.append(ft.Divider(height=1, color=CARD_BORDER))
+                suggestion_rows.append(ft.Divider(height=1, color=pal.border))
 
         return ft.Container(
             expand=True,
@@ -1615,16 +2337,11 @@ def main(page: ft.Page) -> None:
                                 expand=True,
                                 spacing=1,
                                 controls=[
-                                    ft.Text("Explorar rutas", size=19, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                    ft.Text(
-                                        f"Perfiles: {dis_label}",
-                                        size=11,
-                                        color=EMERALD_GREEN,
-                                        weight=ft.FontWeight.W_600,
-                                    ),
+                                    ft.Text("Explorar rutas", size=19, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                    ft.Text(f"Perfiles: {dis_label}", size=11, color=pal.emerald, weight=ft.FontWeight.W_600),
                                 ],
                             ),
-                            build_sos_pill(),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
                     ft.Row(
@@ -1633,7 +2350,7 @@ def main(page: ft.Page) -> None:
                             search_input,
                             ft.FilledButton(
                                 content="Ir",
-                                bgcolor=BLUE_ACTION,
+                                bgcolor=pal.blue_action,
                                 color=ft.Colors.WHITE,
                                 height=48,
                                 on_click=lambda _: go_to_route(state.search_query),
@@ -1641,21 +2358,17 @@ def main(page: ft.Page) -> None:
                         ],
                     ),
                     build_minimalist_map(
+                        pal,
                         show_route=False,
                         badge_text="Zona poco concurrida",
                         show_clinics=True,
                         height=165,
                     ),
-                    ft.Text(
-                        "Rutas sugeridas (lista con tiempo estimado)",
-                        size=14,
-                        weight=ft.FontWeight.BOLD,
-                        color=INDIGO_DARK,
-                    ),
+                    ft.Text("Rutas sugeridas (lista con tiempo estimado)", size=14, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                     ft.Container(
-                        bgcolor=ft.Colors.WHITE,
+                        bgcolor=pal.card_bg,
                         border_radius=16,
-                        border=ft.Border.all(1, CARD_BORDER),
+                        border=ft.Border.all(1, pal.border),
                         clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         content=ft.Column(spacing=0, controls=suggestion_rows),
                     ),
@@ -1664,38 +2377,35 @@ def main(page: ft.Page) -> None:
         )
 
     # =======================================================================
-    # PANTALLA 3: RUTA Y GEMINI (Multi-discapacidad + tiempo + Gemini cada 10 min)
+    # PANTALLA 3: RUTA Y GEMINI
     # =======================================================================
     def build_route_screen() -> ft.Control:
+        pal = t()
         route = state.current_route
         dis_label = format_disabilities_label(state.disabilities)
 
         if state.is_loading_env:
-            banner_bg = EMERALD_SURFACE
+            banner_bg, banner_fg = pal.emerald_bg, pal.emerald_text
             banner_title = "Consultando entorno en tiempo real con Gemini..."
             banner_sub = "Recopilando clima, bloqueos y transporte..."
         elif state.env_error:
-            banner_bg = WARN_SURFACE
+            banner_bg, banner_fg = pal.warn_bg, pal.warn_text
             banner_title = state.env_error
             banner_sub = "Toca recargar cuando vuelvas a tener conexión"
         elif state.env_report:
-            banner_bg = EMERALD_SURFACE
+            banner_bg, banner_fg = pal.emerald_bg, pal.emerald_text
             banner_title = f"Actualizado con Gemini: {state.env_report.get('banner_resumen', '')}"
             banner_sub = (
                 f"Cada {state.env_report.get('next_refresh_minutes', 10)} min · "
                 f"{state.env_report.get('model_used', 'gemini-4-hydrogen')} · Toca para detalles"
             )
         else:
-            banner_bg = EMERALD_SURFACE
+            banner_bg, banner_fg = pal.emerald_bg, pal.emerald_text
             banner_title = "Listo para consultar entorno con Gemini"
             banner_sub = "Actualización automática cada 10 minutos"
 
-        def toggle_details(_: ft.ControlEvent) -> None:
-            state.show_env_details = not state.show_env_details
-            render()
-
         steps_preview = [
-            ft.Text(f"{i + 1}. {step}", size=12, color=INDIGO_DARK)
+            ft.Text(f"{i + 1}. {step}", size=12, color=pal.text_primary)
             for i, step in enumerate(route.get("steps", []))
         ]
 
@@ -1708,37 +2418,53 @@ def main(page: ft.Page) -> None:
                         expand=True,
                         spacing=2,
                         controls=[
-                            ft.Text("Ruta Accesible", size=17, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                            ft.Text(
-                                f"{dis_label} · {route.get('distance_text', '1.2 km')}",
-                                size=12,
-                                color=TEXT_MUTED,
-                            ),
+                            ft.Text("Ruta Accesible", size=17, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                            ft.Text(f"{dis_label} · {route.get('distance_text', '1.2 km')}", size=12, color=pal.text_muted),
                         ],
                     ),
                     ft.Container(
-                        bgcolor="#EEF2FF",
+                        bgcolor=pal.badge_bg,
                         border_radius=12,
                         padding=ft.Padding.symmetric(horizontal=10, vertical=6),
                         content=ft.Row(
                             tight=True,
                             spacing=4,
                             controls=[
-                                ft.Icon(ft.Icons.ACCESS_TIME, size=15, color=INDIGO_DARK),
-                                ft.Text(
-                                    f"~{route.get('estimated_minutes', 15)} min",
-                                    size=13,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=INDIGO_DARK,
-                                ),
+                                ft.Icon(ft.Icons.ACCESS_TIME, size=15, color=pal.badge_text),
+                                ft.Text(f"~{route.get('estimated_minutes', 15)} min", size=13, weight=ft.FontWeight.BOLD, color=pal.badge_text),
                             ],
                         ),
                     ),
                 ],
             ),
-            ft.Text(f"Destino: {state.destination}", size=12, color=TEXT_MUTED),
+            ft.Text(f"Destino: {state.destination}", size=12, color=pal.text_muted),
             ft.Container(
-                bgcolor=NEUTRAL_BG,
+                bgcolor=pal.info_bg if is_auditory_profile_active() else pal.card_alt,
+                border_radius=10,
+                padding=8,
+                content=ft.Row(
+                    spacing=8,
+                    controls=[
+                        ft.Icon(
+                            ft.Icons.HEARING_DISABLED if is_auditory_profile_active() else ft.Icons.RECORD_VOICE_OVER,
+                            color=pal.info_text if is_auditory_profile_active() else pal.emerald,
+                            size=18,
+                        ),
+                        ft.Text(
+                            (
+                                "Guía 100% visual lista (sin depender de audio para perfil auditivo)."
+                                if is_auditory_profile_active()
+                                else "Guía por voz en español lista: te indicará cada paso y obstáculo."
+                            ),
+                            size=12,
+                            color=pal.info_text if is_auditory_profile_active() else pal.text_primary,
+                            expand=True,
+                        ),
+                    ],
+                ),
+            ),
+            ft.Container(
+                bgcolor=pal.card_alt,
                 border_radius=12,
                 padding=10,
                 content=ft.Column(spacing=4, controls=steps_preview),
@@ -1749,17 +2475,17 @@ def main(page: ft.Page) -> None:
             guardian_name = state.current_user["guardian"]["name"]  # type: ignore[index]
             summary_controls.append(
                 ft.Container(
-                    bgcolor=INFO_BLUE_BG,
+                    bgcolor=pal.info_bg,
                     border_radius=12,
                     padding=10,
                     content=ft.Row(
                         spacing=8,
                         controls=[
-                            ft.Icon(ft.Icons.SHARE_LOCATION, color=BLUE_ACTION, size=18),
+                            ft.Icon(ft.Icons.SHARE_LOCATION, color=pal.info_text, size=18),
                             ft.Text(
                                 f"Protección de menor: al iniciar ruta se compartirá tu ubicación en tiempo real con {guardian_name}.",
                                 size=12,
-                                color=INDIGO_DARK,
+                                color=pal.info_text,
                                 expand=True,
                             ),
                         ],
@@ -1773,30 +2499,30 @@ def main(page: ft.Page) -> None:
                 border_radius=14,
                 padding=ft.Padding.symmetric(horizontal=12, vertical=10),
                 ink=True,
-                on_click=toggle_details,
+                on_click=lambda _: (setattr(state, "show_env_details", not state.show_env_details), render()),
                 content=ft.Row(
                     spacing=8,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.ProgressRing(width=16, height=16, stroke_width=2, color=EMERALD_GREEN)
+                        ft.ProgressRing(width=16, height=16, stroke_width=2, color=pal.emerald)
                         if state.is_loading_env
                         else ft.Container(
                             width=10,
                             height=10,
                             border_radius=5,
-                            bgcolor=ALERT_ORANGE if state.env_error else EMERALD_GREEN,
+                            bgcolor=pal.alert_orange if state.env_error else pal.emerald,
                         ),
                         ft.Column(
                             expand=True,
                             spacing=2,
                             controls=[
-                                ft.Text(banner_title, size=12, weight=ft.FontWeight.W_600, color=INDIGO_DARK),
-                                ft.Text(banner_sub, size=11, color="#065F46"),
+                                ft.Text(banner_title, size=12, weight=ft.FontWeight.W_600, color=banner_fg),
+                                ft.Text(banner_sub, size=11, color=banner_fg),
                             ],
                         ),
                         ft.IconButton(
                             icon=ft.Icons.REFRESH,
-                            icon_color=INDIGO_DARK,
+                            icon_color=banner_fg,
                             icon_size=18,
                             on_click=lambda _: page.run_task(refresh_environment, True),
                         ),
@@ -1810,38 +2536,34 @@ def main(page: ft.Page) -> None:
             tips = rep.get("recomendaciones_perfil") or []
             summary_controls.append(
                 ft.Container(
-                    bgcolor=NEUTRAL_BG,
+                    bgcolor=pal.card_alt,
                     border_radius=12,
                     padding=10,
                     content=ft.Column(
                         spacing=4,
                         controls=[
-                            ft.Text(f"Clima: {rep.get('clima', '-')}", size=12, color=INDIGO_DARK),
-                            ft.Text(f"Bloqueos: {', '.join(rep.get('bloqueos', []))}", size=12, color=INDIGO_DARK),
-                            ft.Text(
-                                f"Transporte: {', '.join(rep.get('transporte_afectado', []))}",
-                                size=12,
-                                color=INDIGO_DARK,
-                            ),
-                            *[
-                                ft.Text(f"• {tip}", size=12, color=EMERALD_GREEN, weight=ft.FontWeight.W_600)
-                                for tip in tips
-                            ],
+                            ft.Text(f"Clima: {rep.get('clima', '-')}", size=12, color=pal.text_primary),
+                            ft.Text(f"Bloqueos: {', '.join(rep.get('bloqueos', []))}", size=12, color=pal.text_primary),
+                            ft.Text(f"Transporte: {', '.join(rep.get('transporte_afectado', []))}", size=12, color=pal.text_primary),
+                            *[ft.Text(f"• {tip}", size=12, color=pal.emerald, weight=ft.FontWeight.W_600) for tip in tips],
                         ],
                     ),
                 )
             )
 
         def start_navigation(_: ft.ControlEvent) -> None:
+            state.nav_step_index = 0
+            state.voice_enabled = not is_auditory_profile_active()
             state.screen = "active"
             if is_minor_with_guardian():
                 start_minor_live_sharing()
-            render()
+            start_nav_simulation()
 
         summary_controls.append(
             ft.FilledButton(
-                content="Iniciar Ruta",
-                bgcolor=BLUE_ACTION,
+                content="Iniciar Ruta Simulada",
+                icon=ft.Icons.PLAY_ARROW,
+                bgcolor=pal.blue_action,
                 color=ft.Colors.WHITE,
                 width=float("inf"),
                 height=46,
@@ -1860,27 +2582,17 @@ def main(page: ft.Page) -> None:
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Text("Ruta Accesible", size=20, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                            ft.Row(
-                                spacing=6,
-                                controls=[
-                                    ft.IconButton(
-                                        icon=ft.Icons.SEARCH,
-                                        icon_color=INDIGO_DARK,
-                                        on_click=lambda _: (setattr(state, "screen", "search"), render()),
-                                    ),
-                                    build_sos_pill(),
-                                ],
-                            ),
+                            ft.Text("Ruta Accesible", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
-                    ft.Text("Activa una o varias discapacidades:", size=12, color=TEXT_MUTED),
+                    ft.Text("Activa una o varias discapacidades:", size=12, color=pal.text_muted),
                     build_multi_disability_chips(),
-                    build_minimalist_map(show_route=True, badge_text="Rampa bloqueada", height=155),
+                    build_minimalist_map(pal, show_route=True, badge_text="Rampa bloqueada", height=150),
                     ft.Container(
-                        bgcolor=ft.Colors.WHITE,
+                        bgcolor=pal.card_bg,
                         border_radius=20,
-                        border=ft.Border.all(1, CARD_BORDER),
+                        border=ft.Border.all(1, pal.border),
                         padding=16,
                         content=ft.Column(spacing=10, controls=summary_controls),
                     ),
@@ -1889,11 +2601,28 @@ def main(page: ft.Page) -> None:
         )
 
     # =======================================================================
-    # PANTALLA 4: EN CAMINO (Ubicación en tiempo real + Alarma sonora extravío + SOS)
+    # PANTALLA 4: EN CAMINO (Simulación paso a paso + VOZ / Modo Visual Auditivo + Waze)
     # =======================================================================
     def build_active_screen() -> ft.Control:
+        pal = t()
         route = state.current_route
-        hints = " · ".join(get_profile(d).nav_hint for d in state.disabilities[:2])
+        steps = get_active_nav_steps()
+        idx = min(max(state.nav_step_index, 0), len(steps) - 1)
+        cur = steps[idx]
+        total_steps = len(steps)
+        progress_val = (idx + 1) / max(1, total_steps)
+
+        total_min = int(route.get("estimated_minutes", 15))
+        remaining_min = max(0, int(round(total_min * (1 - idx / max(1, total_steps - 1)))))
+
+        direction_icon_map = {
+            "straight": ft.Icons.STRAIGHT,
+            "right": ft.Icons.TURN_RIGHT,
+            "left": ft.Icons.TURN_LEFT,
+            "arrive": ft.Icons.CHECK_CIRCLE_OUTLINE,
+        }
+        dir_icon = direction_icon_map.get(cur.get("direction", "straight"), ft.Icons.STRAIGHT)
+
         gemini_chip = (
             f"Gemini activo · {state.env_report.get('banner_resumen', '')}"
             if state.env_report
@@ -1901,32 +2630,161 @@ def main(page: ft.Page) -> None:
         )
 
         active_controls: List[ft.Control] = [
+            # Tarjeta de instrucción detallada + Modo Visual (Auditivo) o Voz
             ft.Container(
-                bgcolor=EMERALD_SURFACE,
+                bgcolor=pal.warn_bg if is_auditory_profile_active() else pal.card_bg,
+                border_radius=16,
+                border=ft.Border.all(
+                    2 if is_auditory_profile_active() else 1,
+                    pal.alert_orange if is_auditory_profile_active() else pal.border,
+                ),
+                padding=14,
+                content=ft.Column(
+                    spacing=8,
+                    controls=[
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Text(
+                                    f"Paso {idx + 1} de {total_steps}",
+                                    size=12,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=pal.warn_text if is_auditory_profile_active() else pal.blue_action,
+                                ),
+                                ft.Container(
+                                    bgcolor=pal.info_bg if is_auditory_profile_active() else pal.emerald_bg,
+                                    border_radius=10,
+                                    padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                                    content=ft.Row(
+                                        tight=True,
+                                        spacing=4,
+                                        controls=[
+                                            ft.Icon(
+                                                ft.Icons.HEARING_DISABLED
+                                                if is_auditory_profile_active()
+                                                else (ft.Icons.RECORD_VOICE_OVER if state.voice_enabled else ft.Icons.VOLUME_OFF),
+                                                size=13,
+                                                color=pal.info_text if is_auditory_profile_active() else pal.emerald_text,
+                                            ),
+                                            ft.Text(
+                                                "MODO VISUAL (Auditivo)"
+                                                if is_auditory_profile_active()
+                                                else ("Voz activa" if state.voice_enabled else "Voz silenciada"),
+                                                size=11,
+                                                weight=ft.FontWeight.BOLD,
+                                                color=pal.info_text if is_auditory_profile_active() else pal.emerald_text,
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ],
+                        ),
+                        ft.ProgressBar(value=progress_val, color=pal.blue_action, bgcolor=pal.card_alt),
+                        ft.Text(
+                            cur.get("visual_cue", ""),
+                            size=13,
+                            weight=ft.FontWeight.BOLD,
+                            color=pal.warn_text if is_auditory_profile_active() else pal.text_heading,
+                        ),
+                        ft.Text(
+                            cur.get("detail", ""),
+                            size=13,
+                            color=pal.warn_text if is_auditory_profile_active() else pal.text_primary,
+                        ),
+                        # Controles de simulación y voz
+                        ft.Row(
+                            spacing=8,
+                            controls=[
+                                ft.FilledButton(
+                                    content="Pausar" if state.nav_sim_running else "Simular",
+                                    icon=ft.Icons.PAUSE if state.nav_sim_running else ft.Icons.PLAY_ARROW,
+                                    bgcolor=pal.indigo if state.nav_sim_running else pal.blue_action,
+                                    color=ft.Colors.WHITE,
+                                    expand=True,
+                                    on_click=lambda _: pause_nav_simulation() if state.nav_sim_running else start_nav_simulation(),
+                                ),
+                                styled_outlined_button(
+                                    pal,
+                                    text="Siguiente",
+                                    icon=ft.Icons.SKIP_NEXT,
+                                    expand=True,
+                                    on_click=lambda _: advance_nav_step(),
+                                ),
+                            ],
+                        ),
+                        *(
+                            [
+                                ft.Container(
+                                    bgcolor=pal.card_bg,
+                                    border_radius=10,
+                                    padding=8,
+                                    content=ft.Row(
+                                        spacing=6,
+                                        controls=[
+                                            ft.Icon(ft.Icons.VIBRATION, color=pal.alert_orange, size=16),
+                                            ft.Text(
+                                                "Audio desactivado automáticamente para perfil Auditivo. Todas las señales son visuales y claras.",
+                                                size=11,
+                                                color=pal.text_muted,
+                                                expand=True,
+                                            ),
+                                        ],
+                                    ),
+                                )
+                            ]
+                            if is_auditory_profile_active()
+                            else [
+                                ft.Row(
+                                    spacing=8,
+                                    controls=[
+                                        styled_outlined_button(
+                                            pal,
+                                            text="Repetir por voz",
+                                            icon=ft.Icons.RECORD_VOICE_OVER,
+                                            icon_color=pal.emerald,
+                                            expand=True,
+                                            on_click=lambda _: page.run_task(speak_current_step),
+                                        ),
+                                        styled_outlined_button(
+                                            pal,
+                                            text="Silenciar" if state.voice_enabled else "Activar voz",
+                                            icon=ft.Icons.VOLUME_OFF if state.voice_enabled else ft.Icons.VOLUME_UP,
+                                            expand=True,
+                                            on_click=lambda _: (
+                                                setattr(state, "voice_enabled", not state.voice_enabled),
+                                                stop_voice_speech() if not state.voice_enabled else None,
+                                                render(),
+                                            ),
+                                        ),
+                                    ],
+                                )
+                            ]
+                        ),
+                    ],
+                ),
+            ),
+            ft.Container(
+                bgcolor=pal.emerald_bg,
                 border_radius=14,
                 padding=ft.Padding.symmetric(horizontal=12, vertical=6),
-                content=ft.Text(gemini_chip, size=12, color=INDIGO_DARK, weight=ft.FontWeight.W_600),
-            )
+                content=ft.Text(gemini_chip, size=12, color=pal.emerald_text, weight=ft.FontWeight.W_600),
+            ),
         ]
 
         if is_minor_with_guardian():
             guardian = state.current_user["guardian"]  # type: ignore[index]
-            shared_info = (
-                f"Último envío: {state.last_location_shared_at}"
-                if state.last_location_shared_at
-                else "Enviando ubicación en vivo..."
-            )
+            shared_info = f"Último envío: {state.last_location_shared_at}" if state.last_location_shared_at else "Enviando ubicación..."
             active_controls.append(
                 ft.Container(
-                    bgcolor=INFO_BLUE_BG,
+                    bgcolor=pal.info_bg,
                     border_radius=14,
-                    border=ft.Border.all(1, BLUE_ACTION),
+                    border=ft.Border.all(1, pal.blue_action),
                     padding=10,
                     content=ft.Row(
                         spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Icon(ft.Icons.MY_LOCATION, color=BLUE_ACTION, size=20),
+                            ft.Icon(ft.Icons.MY_LOCATION, color=pal.info_text, size=20),
                             ft.Column(
                                 expand=True,
                                 spacing=2,
@@ -1935,13 +2793,9 @@ def main(page: ft.Page) -> None:
                                         f"Ubicación en tiempo real compartida con {guardian['name']}",
                                         size=12,
                                         weight=ft.FontWeight.BOLD,
-                                        color=INDIGO_DARK,
+                                        color=pal.info_text,
                                     ),
-                                    ft.Text(
-                                        f"{guardian.get('phone') or guardian.get('email')} · {shared_info}",
-                                        size=11,
-                                        color=TEXT_MUTED,
-                                    ),
+                                    ft.Text(f"{guardian.get('phone') or guardian.get('email')} · {shared_info}", size=11, color=pal.info_text),
                                 ],
                             ),
                         ],
@@ -1951,90 +2805,76 @@ def main(page: ft.Page) -> None:
 
         active_controls.append(
             build_minimalist_map(
+                pal,
                 show_route=True,
                 badge_text="",
                 show_user_arrow=True,
-                height=170,
+                arrow_step=idx,
+                height=165,
             )
         )
 
         action_buttons: List[ft.Control] = [
-            ft.Text(f"Rumbo a: {state.destination}", size=12, color=TEXT_MUTED),
+            ft.Text(f"Rumbo a: {state.destination}", size=12, color=pal.text_muted),
             ft.FilledButton(
-                content="Botón de Emergencia (SOS)",
-                icon=ft.Icons.EMERGENCY,
-                bgcolor=DANGER_RED,
+                content="Reportar Incidencia (¿Qué ves?)",
+                icon=ft.Icons.WARNING_AMBER,
+                bgcolor=pal.alert_orange,
                 color=ft.Colors.WHITE,
                 width=float("inf"),
                 height=46,
+                on_click=open_waze_report_sheet,
+            ),
+            ft.FilledButton(
+                content="Botón de Emergencia (SOS)",
+                icon=ft.Icons.EMERGENCY,
+                bgcolor=pal.danger_red,
+                color=ft.Colors.WHITE,
+                width=float("inf"),
+                height=44,
                 on_click=open_emergency_dialog,
+            ),
+            ft.FilledButton(
+                content="Detener alarma sonora" if state.lost_alarm_active else "Me extravié · Activar alarma sonora",
+                icon=ft.Icons.STOP_CIRCLE if state.lost_alarm_active else ft.Icons.VOLUME_UP,
+                bgcolor=pal.indigo if state.lost_alarm_active else "#B91C1C",
+                color=ft.Colors.WHITE,
+                width=float("inf"),
+                height=44,
+                on_click=stop_lost_alarm if state.lost_alarm_active else (lambda _: page.run_task(activate_lost_minor_alarm)),
+            ),
+            styled_outlined_button(
+                pal,
+                text="Pedir Guía Voluntaria",
+                icon=ft.Icons.PEOPLE,
+                icon_color=pal.blue_action,
+                width=float("inf"),
+                height=42,
+                on_click=lambda _: page.run_task(request_volunteer),
+            ),
+            styled_outlined_button(
+                pal,
+                text="Finalizar recorrido",
+                text_color=pal.danger_red,
+                border_color=pal.danger_red,
+                width=float("inf"),
+                height=42,
+                on_click=lambda _: (
+                    pause_nav_simulation(),
+                    stop_minor_live_sharing(),
+                    stop_lost_alarm() if state.lost_alarm_active else None,
+                    setattr(state, "refresh_generation", state.refresh_generation + 1),
+                    setattr(state, "screen", "search"),
+                    render(),
+                ),
             ),
         ]
 
-        # Botón de extravío con alarma sonora (visible siempre en ruta, destacado para menores)
-        if state.lost_alarm_active:
-            action_buttons.append(
-                ft.FilledButton(
-                    content="Detener alarma sonora de extravío",
-                    icon=ft.Icons.STOP_CIRCLE,
-                    bgcolor=INDIGO_DARK,
-                    color=ft.Colors.WHITE,
-                    width=float("inf"),
-                    height=46,
-                    on_click=stop_lost_alarm,
-                )
-            )
-        else:
-            action_buttons.append(
-                ft.FilledButton(
-                    content="Me extravié · Activar alarma sonora",
-                    icon=ft.Icons.VOLUME_UP,
-                    bgcolor=ALERT_ORANGE,
-                    color=ft.Colors.WHITE,
-                    width=float("inf"),
-                    height=46,
-                    on_click=lambda _: page.run_task(activate_lost_minor_alarm),
-                )
-            )
-
-        action_buttons.extend(
-            [
-                ft.OutlinedButton(
-                    content="Reportar Incidencia",
-                    icon=ft.Icons.REPORT,
-                    icon_color=ALERT_ORANGE,
-                    width=float("inf"),
-                    height=42,
-                    on_click=open_report_incident_dialog,
-                ),
-                ft.OutlinedButton(
-                    content="Pedir Guía Voluntaria",
-                    icon=ft.Icons.PEOPLE,
-                    icon_color=BLUE_ACTION,
-                    width=float("inf"),
-                    height=42,
-                    on_click=lambda _: page.run_task(request_volunteer),
-                ),
-                ft.OutlinedButton(
-                    content="Finalizar recorrido",
-                    width=float("inf"),
-                    height=42,
-                    on_click=lambda _: (
-                        stop_minor_live_sharing(),
-                        stop_lost_alarm() if state.lost_alarm_active else None,
-                        setattr(state, "refresh_generation", state.refresh_generation + 1),
-                        setattr(state, "screen", "search"),
-                        render(),
-                    ),
-                ),
-            ]
-        )
-
         active_controls.append(
             ft.Container(
-                bgcolor=ft.Colors.WHITE,
+                bgcolor=pal.card_bg,
                 border_radius=20,
-                border=ft.Border.all(1, CARD_BORDER),
+                border=ft.Border.all(1, pal.border),
                 padding=16,
                 content=ft.Column(spacing=9, controls=action_buttons),
             )
@@ -2045,33 +2885,31 @@ def main(page: ft.Page) -> None:
             spacing=0,
             controls=[
                 ft.Container(
-                    bgcolor=INDIGO_DARK,
+                    bgcolor=pal.indigo,
                     padding=ft.Padding.symmetric(horizontal=16, vertical=16),
                     content=ft.Row(
                         spacing=12,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Icon(ft.Icons.TURN_RIGHT, color=ft.Colors.WHITE, size=34),
+                            ft.Icon(dir_icon, color=ft.Colors.WHITE, size=36),
                             ft.Column(
                                 expand=True,
                                 spacing=2,
                                 controls=[
+                                    ft.Text(cur.get("headline", ""), color=ft.Colors.WHITE, size=16, weight=ft.FontWeight.BOLD),
                                     ft.Text(
-                                        "Gira a la derecha en 80m",
-                                        color=ft.Colors.WHITE,
-                                        size=17,
-                                        weight=ft.FontWeight.BOLD,
-                                    ),
-                                    ft.Text(f"· {hints}", color=EMERALD_SURFACE, size=12),
-                                    ft.Text(
-                                        f"Tiempo estimado: ~{route.get('estimated_minutes', 15)} min ({route.get('distance_text', '1.2 km')})",
+                                        f"Restante: ~{remaining_min} min · {route.get('distance_text', '')}",
                                         color="#BFDBFE",
                                         size=12,
                                         weight=ft.FontWeight.W_600,
                                     ),
                                 ],
                             ),
-                            build_sos_pill(),
+                            ft.Column(
+                                horizontal_alignment=ft.CrossAxisAlignment.END,
+                                spacing=6,
+                                controls=[build_sos_pill(), build_theme_toggle()],
+                            ),
                         ],
                     ),
                 ),
@@ -2089,43 +2927,43 @@ def main(page: ft.Page) -> None:
         )
 
     # =======================================================================
-    # SECCIÓN HISTORIAL DE INCIDENCIAS (Reportar + Lista cronológica completa)
+    # SECCIÓN HISTORIAL DE INCIDENCIAS + Botón Waze ("¿Qué ves?")
     # =======================================================================
     def build_incidents_screen() -> ft.Control:
+        pal = t()
+
         def severity_colors(sev: str) -> tuple[str, str]:
             val = sev.lower()
             if val == "alto":
-                return DANGER_SURFACE, DANGER_RED
+                return pal.danger_bg, pal.danger_text
             if val == "medio":
-                return WARN_SURFACE, "#B45309"
-            return EMERALD_SURFACE, "#065F46"
+                return pal.warn_bg, pal.warn_text
+            return pal.emerald_bg, pal.emerald_text
 
         history_cards: List[ft.Control] = []
         if not state.incidents:
             history_cards.append(
                 ft.Container(
-                    bgcolor=ft.Colors.WHITE,
+                    bgcolor=pal.card_bg,
                     border_radius=16,
-                    border=ft.Border.all(1, CARD_BORDER),
+                    border=ft.Border.all(1, pal.border),
                     padding=20,
                     alignment=ft.Alignment.CENTER,
-                    content=ft.Text("No hay incidencias registradas todavía.", color=TEXT_MUTED),
+                    content=ft.Text("No hay incidencias registradas todavía.", color=pal.text_muted),
                 )
             )
         else:
             for inc in state.incidents:
                 sev = str(inc.get("severity", "medio"))
                 sev_bg, sev_fg = severity_colors(sev)
-                labels = inc.get("disabilities_labels") or [
-                    get_profile(d).label for d in inc.get("disabilities", [])
-                ]
+                labels = inc.get("disabilities_labels") or [get_profile(d).label for d in inc.get("disabilities", [])]
                 affected_text = ", ".join(labels) if labels else "Accesibilidad general"
 
                 history_cards.append(
                     ft.Container(
-                        bgcolor=ft.Colors.WHITE,
+                        bgcolor=pal.card_bg,
                         border_radius=16,
-                        border=ft.Border.all(1, CARD_BORDER),
+                        border=ft.Border.all(1, pal.border),
                         padding=14,
                         content=ft.Column(
                             spacing=6,
@@ -2134,53 +2972,28 @@ def main(page: ft.Page) -> None:
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                     controls=[
-                                        ft.Text(
-                                            inc.get("title", "Incidencia"),
-                                            size=15,
-                                            weight=ft.FontWeight.BOLD,
-                                            color=INDIGO_DARK,
-                                            expand=True,
-                                        ),
+                                        ft.Text(inc.get("title", "Incidencia"), size=15, weight=ft.FontWeight.BOLD, color=pal.text_heading, expand=True),
                                         ft.Container(
                                             bgcolor=sev_bg,
                                             border_radius=10,
                                             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
-                                            content=ft.Text(
-                                                sev.upper(),
-                                                size=11,
-                                                weight=ft.FontWeight.BOLD,
-                                                color=sev_fg,
-                                            ),
+                                            content=ft.Text(sev.upper(), size=11, weight=ft.FontWeight.BOLD, color=sev_fg),
                                         ),
                                     ],
                                 ),
-                                ft.Text(
-                                    f"Ubicación: {inc.get('location', 'Coyoacán')}",
-                                    size=12,
-                                    color=INDIGO_DARK,
-                                    weight=ft.FontWeight.W_500,
-                                ),
+                                ft.Text(f"Ubicación: {inc.get('location', 'Coyoacán')}", size=12, color=pal.text_primary, weight=ft.FontWeight.W_500),
                                 ft.Text(
                                     f"Fecha: {format_timestamp_short(inc.get('created_at', ''))} · Por: {inc.get('reported_by', 'Comunidad')}",
                                     size=11,
-                                    color=TEXT_MUTED,
+                                    color=pal.text_muted,
                                 ),
-                                ft.Text(f"Perfiles afectados: {affected_text}", size=11, color=BLUE_ACTION),
-                                *(
-                                    [ft.Text(inc["description"], size=12, color=TEXT_MUTED)]
-                                    if inc.get("description")
-                                    else []
-                                ),
+                                ft.Text(f"Perfiles afectados: {affected_text}", size=11, color=pal.blue_action, weight=ft.FontWeight.W_600),
+                                *([ft.Text(inc["description"], size=12, color=pal.text_muted)] if inc.get("description") else []),
                                 ft.Container(
-                                    bgcolor=EMERALD_SURFACE,
+                                    bgcolor=pal.emerald_bg,
                                     border_radius=10,
                                     padding=8,
-                                    content=ft.Text(
-                                        f"Consejo de Gemini: {inc.get('ai_advice', '')}",
-                                        size=12,
-                                        color="#065F46",
-                                        weight=ft.FontWeight.W_500,
-                                    ),
+                                    content=ft.Text(f"Consejo de Gemini: {inc.get('ai_advice', '')}", size=12, color=pal.emerald_text, weight=ft.FontWeight.W_500),
                                 ),
                             ],
                         ),
@@ -2199,37 +3012,24 @@ def main(page: ft.Page) -> None:
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(
+                                expand=True,
                                 spacing=1,
                                 controls=[
-                                    ft.Text("Historial de Incidencias", size=19, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                    ft.Text(
-                                        f"Reportes registrados: {len(state.incidents)}",
-                                        size=12,
-                                        color=TEXT_MUTED,
-                                    ),
+                                    ft.Text("Historial de Incidencias", size=19, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                    ft.Text(f"Reportes registrados: {len(state.incidents)}", size=12, color=pal.text_muted),
                                 ],
                             ),
-                            ft.Row(
-                                spacing=6,
-                                controls=[
-                                    ft.IconButton(
-                                        icon=ft.Icons.REFRESH,
-                                        icon_color=INDIGO_DARK,
-                                        on_click=lambda _: page.run_task(load_incidents_history),
-                                    ),
-                                    build_sos_pill(),
-                                ],
-                            ),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
                     ft.FilledButton(
-                        content="Reportar nueva incidencia",
+                        content="Reportar incidencia (¿Qué ves?)",
                         icon=ft.Icons.ADD_CIRCLE,
-                        bgcolor=BLUE_ACTION,
+                        bgcolor=pal.alert_orange,
                         color=ft.Colors.WHITE,
                         width=float("inf"),
-                        height=46,
-                        on_click=open_report_incident_dialog,
+                        height=48,
+                        on_click=open_waze_report_sheet,
                     ),
                     *history_cards,
                 ],
@@ -2237,21 +3037,22 @@ def main(page: ft.Page) -> None:
         )
 
     # =======================================================================
-    # SECCIÓN CLÍNICAS (Horarios, accesibilidad, teléfono y QUÉ DEBES LLEVAR)
+    # SECCIÓN CLÍNICAS
     # =======================================================================
     def build_clinics_screen() -> ft.Control:
+        pal = t()
         dis_label = format_disabilities_label(state.disabilities)
         cards: List[ft.Control] = []
 
         for clinic in state.clinics:
-            reqs = [ft.Text(f"• {req}", size=12, color=INDIGO_DARK) for req in clinic.get("requirements_to_bring", [])]
-            acc_items = [ft.Text(f"✓ {feat}", size=11, color="#065F46") for feat in clinic.get("accessibility_features", [])]
+            reqs = [ft.Text(f"• {req}", size=12, color=pal.text_primary) for req in clinic.get("requirements_to_bring", [])]
+            acc_items = [ft.Text(f"✓ {feat}", size=11, color=pal.emerald_text) for feat in clinic.get("accessibility_features", [])]
 
             cards.append(
                 ft.Container(
-                    bgcolor=ft.Colors.WHITE,
+                    bgcolor=pal.card_bg,
                     border_radius=18,
-                    border=ft.Border.all(1, CARD_BORDER),
+                    border=ft.Border.all(1, pal.border),
                     padding=16,
                     content=ft.Column(
                         spacing=8,
@@ -2264,19 +3065,19 @@ def main(page: ft.Page) -> None:
                                         expand=True,
                                         spacing=2,
                                         controls=[
-                                            ft.Text(clinic["name"], size=16, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                            ft.Text(clinic["address"], size=12, color=TEXT_MUTED),
+                                            ft.Text(clinic["name"], size=16, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                            ft.Text(clinic["address"], size=12, color=pal.text_muted),
                                         ],
                                     ),
                                     ft.Container(
-                                        bgcolor="#EEF2FF",
+                                        bgcolor=pal.badge_bg,
                                         border_radius=10,
                                         padding=ft.Padding.symmetric(horizontal=8, vertical=4),
                                         content=ft.Text(
                                             f"{clinic['distance_text']} · ~{clinic['estimated_minutes']} min",
                                             size=11,
                                             weight=ft.FontWeight.BOLD,
-                                            color=INDIGO_DARK,
+                                            color=pal.badge_text,
                                         ),
                                     ),
                                 ],
@@ -2284,11 +3085,11 @@ def main(page: ft.Page) -> None:
                             ft.Row(
                                 spacing=6,
                                 controls=[
-                                    ft.Icon(ft.Icons.SCHEDULE, size=15, color=EMERALD_GREEN),
+                                    ft.Icon(ft.Icons.SCHEDULE, size=15, color=pal.emerald),
                                     ft.Text(
                                         f"Horario: {clinic['schedule']} · {clinic.get('emergency_hours', '')}",
                                         size=12,
-                                        color=INDIGO_DARK,
+                                        color=pal.text_primary,
                                         expand=True,
                                     ),
                                 ],
@@ -2296,25 +3097,25 @@ def main(page: ft.Page) -> None:
                             ft.Row(
                                 spacing=6,
                                 controls=[
-                                    ft.Icon(ft.Icons.PHONE, size=15, color=BLUE_ACTION),
-                                    ft.Text(f"Teléfono: {clinic.get('phone', 'N/D')}", size=12, color=INDIGO_DARK),
+                                    ft.Icon(ft.Icons.PHONE, size=15, color=pal.blue_action),
+                                    ft.Text(f"Teléfono: {clinic.get('phone', 'N/D')}", size=12, color=pal.text_primary),
                                 ],
                             ),
-                            ft.Text(f"Servicios: {', '.join(clinic.get('services', []))}", size=12, color=TEXT_MUTED),
+                            ft.Text(f"Servicios: {', '.join(clinic.get('services', []))}", size=12, color=pal.text_muted),
                             ft.Container(
-                                bgcolor=EMERALD_SURFACE,
+                                bgcolor=pal.emerald_bg,
                                 border_radius=10,
                                 padding=10,
                                 content=ft.Column(
                                     spacing=2,
                                     controls=[
-                                        ft.Text("Accesibilidad verificada:", size=12, weight=ft.FontWeight.BOLD, color="#065F46"),
+                                        ft.Text("Accesibilidad verificada:", size=12, weight=ft.FontWeight.BOLD, color=pal.emerald_text),
                                         *acc_items,
                                     ],
                                 ),
                             ),
                             ft.Container(
-                                bgcolor=NEUTRAL_BG,
+                                bgcolor=pal.card_alt,
                                 border_radius=10,
                                 padding=10,
                                 content=ft.Column(
@@ -2323,8 +3124,8 @@ def main(page: ft.Page) -> None:
                                         ft.Row(
                                             spacing=6,
                                             controls=[
-                                                ft.Icon(ft.Icons.LIST_ALT, size=15, color=INDIGO_DARK),
-                                                ft.Text("Qué debes llevar:", size=12, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
+                                                ft.Icon(ft.Icons.LIST_ALT, size=15, color=pal.text_heading),
+                                                ft.Text("Qué debes llevar:", size=12, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                                             ],
                                         ),
                                         *reqs,
@@ -2334,7 +3135,7 @@ def main(page: ft.Page) -> None:
                             ft.FilledButton(
                                 content=f"Trazar ruta (~{clinic['estimated_minutes']} min)",
                                 icon=ft.Icons.DIRECTIONS,
-                                bgcolor=BLUE_ACTION,
+                                bgcolor=pal.blue_action,
                                 color=ft.Colors.WHITE,
                                 width=float("inf"),
                                 height=42,
@@ -2360,16 +3161,11 @@ def main(page: ft.Page) -> None:
                                 expand=True,
                                 spacing=1,
                                 controls=[
-                                    ft.Text("Clínicas cercanas", size=20, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                    ft.Text(
-                                        f"Tiempos calculados para: {dis_label}",
-                                        size=11,
-                                        color=EMERALD_GREEN,
-                                        weight=ft.FontWeight.W_600,
-                                    ),
+                                    ft.Text("Clínicas cercanas", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                    ft.Text(f"Tiempos para: {dis_label}", size=11, color=pal.emerald, weight=ft.FontWeight.W_600),
                                 ],
                             ),
-                            build_sos_pill(),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
                     *cards,
@@ -2378,41 +3174,36 @@ def main(page: ft.Page) -> None:
         )
 
     # =======================================================================
-    # SECCIÓN VOLUNTARIOS (Inicialmente vacía + foto de rostro obligatoria visible)
+    # SECCIÓN VOLUNTARIOS (Lista inicialmente vacía + foto rostro verificada)
     # =======================================================================
     def build_volunteers_screen() -> ft.Control:
+        pal = t()
         body_controls: List[ft.Control] = []
 
         if not state.volunteers:
             body_controls.append(
                 ft.Container(
-                    bgcolor=ft.Colors.WHITE,
+                    bgcolor=pal.card_bg,
                     border_radius=18,
-                    border=ft.Border.all(1, CARD_BORDER),
+                    border=ft.Border.all(1, pal.border),
                     padding=24,
                     alignment=ft.Alignment.CENTER,
                     content=ft.Column(
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=10,
                         controls=[
-                            ft.Icon(ft.Icons.VOLUNTEER_ACTIVISM, size=48, color=TEXT_MUTED),
-                            ft.Text(
-                                "Aún no hay voluntarios registrados",
-                                size=16,
-                                weight=ft.FontWeight.BOLD,
-                                color=INDIGO_DARK,
-                                text_align=ft.TextAlign.CENTER,
-                            ),
+                            ft.Icon(ft.Icons.VOLUNTEER_ACTIVISM, size=48, color=pal.text_muted),
+                            ft.Text("Aún no hay voluntarios registrados", size=16, weight=ft.FontWeight.BOLD, color=pal.text_heading, text_align=ft.TextAlign.CENTER),
                             ft.Text(
                                 "Para seguridad de la comunidad, cada voluntario debe subir una foto de su rostro al postularse desde Perfil.",
                                 size=13,
-                                color=TEXT_MUTED,
+                                color=pal.text_muted,
                                 text_align=ft.TextAlign.CENTER,
                             ),
                             ft.FilledButton(
                                 content="Ir a mi Perfil para postularme",
                                 icon=ft.Icons.PERSON_ADD,
-                                bgcolor=BLUE_ACTION,
+                                bgcolor=pal.blue_action,
                                 color=ft.Colors.WHITE,
                                 on_click=lambda _: (setattr(state, "screen", "profile"), render()),
                             ),
@@ -2424,9 +3215,9 @@ def main(page: ft.Page) -> None:
             for vol in state.volunteers:
                 body_controls.append(
                     ft.Container(
-                        bgcolor=ft.Colors.WHITE,
+                        bgcolor=pal.card_bg,
                         border_radius=16,
-                        border=ft.Border.all(1, CARD_BORDER),
+                        border=ft.Border.all(1, pal.border),
                         padding=14,
                         content=ft.Column(
                             spacing=8,
@@ -2435,41 +3226,28 @@ def main(page: ft.Page) -> None:
                                     spacing=12,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                     controls=[
-                                        build_face_avatar(
-                                            vol.get("face_photo_base64"),
-                                            size=64,
-                                            fallback_icon=ft.Icons.VOLUNTEER_ACTIVISM,
-                                        ),
+                                        build_face_avatar(pal, vol.get("face_photo_base64"), size=64, fallback_icon=ft.Icons.VOLUNTEER_ACTIVISM),
                                         ft.Column(
                                             expand=True,
                                             spacing=3,
                                             controls=[
-                                                ft.Text(
-                                                    vol["username"],
-                                                    size=16,
-                                                    weight=ft.FontWeight.BOLD,
-                                                    color=INDIGO_DARK,
-                                                ),
+                                                ft.Text(vol["username"], size=16, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                                                 ft.Container(
-                                                    bgcolor=EMERALD_SURFACE,
+                                                    bgcolor=pal.emerald_bg,
                                                     border_radius=10,
                                                     padding=ft.Padding.symmetric(horizontal=8, vertical=2),
-                                                    content=ft.Text(
-                                                        "Foto de rostro verificada · Disponible",
-                                                        size=11,
-                                                        color="#065F46",
-                                                        weight=ft.FontWeight.W_600,
-                                                    ),
+                                                    content=ft.Text("Foto de rostro verificada · Disponible", size=11, color=pal.emerald_text, weight=ft.FontWeight.W_600),
                                                 ),
-                                                ft.Text(f"Zona: {vol['zone']}", size=12, color=INDIGO_DARK),
+                                                ft.Text(f"Zona: {vol['zone']}", size=12, color=pal.text_primary),
                                             ],
                                         ),
                                     ],
                                 ),
-                                ft.Text(f"Horario: {vol['availability']}", size=12, color=TEXT_MUTED),
-                                ft.Text(f"Apoyo: {vol['support_notes']}", size=12, color=TEXT_MUTED),
-                                ft.OutlinedButton(
-                                    content="Solicitar acompañamiento",
+                                ft.Text(f"Horario: {vol['availability']}", size=12, color=pal.text_muted),
+                                ft.Text(f"Apoyo: {vol['support_notes']}", size=12, color=pal.text_muted),
+                                styled_outlined_button(
+                                    pal,
+                                    text="Solicitar acompañamiento",
                                     icon=ft.Icons.PEOPLE,
                                     width=float("inf"),
                                     on_click=lambda _: page.run_task(request_volunteer),
@@ -2491,23 +3269,14 @@ def main(page: ft.Page) -> None:
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(
+                                expand=True,
                                 spacing=1,
                                 controls=[
-                                    ft.Text("Guías Voluntarias", size=20, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                    ft.Text(f"Voluntarios activos: {len(state.volunteers)}", size=12, color=TEXT_MUTED),
+                                    ft.Text("Guías Voluntarias", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                    ft.Text(f"Voluntarios activos: {len(state.volunteers)}", size=12, color=pal.text_muted),
                                 ],
                             ),
-                            ft.Row(
-                                spacing=6,
-                                controls=[
-                                    ft.IconButton(
-                                        icon=ft.Icons.REFRESH,
-                                        icon_color=INDIGO_DARK,
-                                        on_click=lambda _: page.run_task(load_volunteers),
-                                    ),
-                                    build_sos_pill(),
-                                ],
-                            ),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
                     *body_controls,
@@ -2516,18 +3285,18 @@ def main(page: ft.Page) -> None:
         )
 
     # =======================================================================
-    # SECCIÓN PERFIL (Foto opcional usuario, foto OBLIGATORIA voluntario,
-    # múltiples discapacidades y protección para menores + familiar)
+    # SECCIÓN PERFIL (Alto contraste + Switch Modo Noche + Voluntario + Menor)
     # =======================================================================
     def build_profile_screen() -> ft.Control:
-        # --- Caso A: Usuario con sesión iniciada ---
+        pal = t()
+
+        # --- Caso A: Sesión iniciada ---
         if state.current_user is not None:
             user = state.current_user
 
             def on_user_photo_picked(b64: str, filename: str) -> None:
                 user["face_photo_base64"] = b64
                 user["face_photo_filename"] = filename
-                # Si aún no eligió foto aparte para voluntario, se prellena automáticamente
                 if not state.vol_photo_b64:
                     state.vol_photo_b64 = b64
                     state.vol_photo_name = filename
@@ -2537,11 +3306,7 @@ def main(page: ft.Page) -> None:
                         async with httpx.AsyncClient(timeout=10.0) as client:
                             await client.put(
                                 f"{state.api_url}/api/v1/profile",
-                                json={
-                                    "user_id": user["id"],
-                                    "face_photo_base64": b64,
-                                    "face_photo_filename": filename,
-                                },
+                                json={"user_id": user["id"], "face_photo_base64": b64, "face_photo_filename": filename},
                             )
                     except Exception:
                         pass
@@ -2563,9 +3328,7 @@ def main(page: ft.Page) -> None:
                 photo_name = state.vol_photo_name or user.get("face_photo_filename") or "rostro_voluntario.jpg"
 
                 if not photo_to_use:
-                    state.vol_error = (
-                        "Debes subir una foto de tu rostro obligatoriamente para poder identificarte como voluntario."
-                    )
+                    state.vol_error = "Debes subir una foto de tu rostro obligatoriamente para poder identificarte como voluntario."
                     render()
                     return
 
@@ -2617,19 +3380,13 @@ def main(page: ft.Page) -> None:
                 state.auth_error = None
                 render()
 
-            # Panel de protección para menores (si es menor o desea configurar un familiar)
             minor_guardian = user.get("guardian") or {}
             minor_section_controls: List[ft.Control] = [
                 ft.Row(
                     spacing=8,
                     controls=[
-                        ft.Icon(ft.Icons.CHILD_CARE, color=BLUE_ACTION),
-                        ft.Text(
-                            "Protección para menores de edad",
-                            size=15,
-                            weight=ft.FontWeight.BOLD,
-                            color=INDIGO_DARK,
-                        ),
+                        ft.Icon(ft.Icons.CHILD_CARE, color=pal.blue_action),
+                        ft.Text("Protección para menores de edad", size=15, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                     ],
                 )
             ]
@@ -2641,10 +3398,10 @@ def main(page: ft.Page) -> None:
                             f"Familiar registrado: {minor_guardian.get('name')} ({minor_guardian.get('relation', 'Familiar')})\n"
                             f"Contacto: {minor_guardian.get('phone') or minor_guardian.get('email')}",
                             size=12,
-                            color=INDIGO_DARK,
+                            color=pal.text_primary,
                         ),
                         ft.Container(
-                            bgcolor=INFO_BLUE_BG if state.live_sharing_active else NEUTRAL_BG,
+                            bgcolor=pal.info_bg if state.live_sharing_active else pal.card_alt,
                             border_radius=10,
                             padding=10,
                             content=ft.Text(
@@ -2654,30 +3411,25 @@ def main(page: ft.Page) -> None:
                                     else "La ubicación en tiempo real se activa automáticamente al iniciar una ruta o aquí abajo."
                                 ),
                                 size=12,
-                                color=INDIGO_DARK,
+                                color=pal.info_text if state.live_sharing_active else pal.text_primary,
                             ),
                         ),
-                        ft.Row(
-                            spacing=8,
-                            controls=[
-                                ft.FilledButton(
-                                    content="Pausar ubicación" if state.live_sharing_active else "Compartir ubicación ahora",
-                                    icon=ft.Icons.SHARE_LOCATION,
-                                    bgcolor=INDIGO_DARK if state.live_sharing_active else BLUE_ACTION,
-                                    color=ft.Colors.WHITE,
-                                    expand=True,
-                                    on_click=lambda _: (
-                                        (stop_minor_live_sharing(), render())
-                                        if state.live_sharing_active
-                                        else (start_minor_live_sharing(), render())
-                                    ),
-                                ),
-                            ],
+                        ft.FilledButton(
+                            content="Pausar ubicación" if state.live_sharing_active else "Compartir ubicación ahora",
+                            icon=ft.Icons.SHARE_LOCATION,
+                            bgcolor=pal.indigo if state.live_sharing_active else pal.blue_action,
+                            color=ft.Colors.WHITE,
+                            width=float("inf"),
+                            on_click=lambda _: (
+                                (stop_minor_live_sharing(), render())
+                                if state.live_sharing_active
+                                else (start_minor_live_sharing(), render())
+                            ),
                         ),
                         ft.FilledButton(
                             content="Detener alarma sonora" if state.lost_alarm_active else "Me extravié · Emitir alarma sonora",
                             icon=ft.Icons.STOP_CIRCLE if state.lost_alarm_active else ft.Icons.VOLUME_UP,
-                            bgcolor=INDIGO_DARK if state.lost_alarm_active else ALERT_ORANGE,
+                            bgcolor=pal.indigo if state.lost_alarm_active else pal.alert_orange,
                             color=ft.Colors.WHITE,
                             width=float("inf"),
                             on_click=stop_lost_alarm if state.lost_alarm_active else (lambda _: page.run_task(activate_lost_minor_alarm)),
@@ -2687,18 +3439,17 @@ def main(page: ft.Page) -> None:
             else:
                 minor_section_controls.append(
                     ft.Text(
-                        "Cuenta de usuario adulto. (Si necesitas modo menor con seguimiento familiar, puedes activarlo al crear una cuenta de menor).",
+                        "Cuenta de usuario adulto. (Si necesitas modo menor con seguimiento familiar, actívalo al crear una cuenta de menor).",
                         size=12,
-                        color=TEXT_MUTED,
+                        color=pal.text_muted,
                     )
                 )
 
-            # Bloque de postulación a voluntario (CON FOTO DE ROSTRO OBLIGATORIA)
             effective_vol_photo = state.vol_photo_b64 or user.get("face_photo_base64")
             volunteer_block: ft.Control
             if user.get("is_volunteer"):
                 volunteer_block = ft.Container(
-                    bgcolor=EMERALD_SURFACE,
+                    bgcolor=pal.emerald_bg,
                     border_radius=14,
                     padding=14,
                     content=ft.Column(
@@ -2707,23 +3458,22 @@ def main(page: ft.Page) -> None:
                             ft.Row(
                                 spacing=10,
                                 controls=[
-                                    build_face_avatar(effective_vol_photo, size=50),
+                                    build_face_avatar(pal, effective_vol_photo, size=50),
                                     ft.Column(
                                         expand=True,
                                         spacing=2,
                                         controls=[
-                                            ft.Text("Ya eres guía voluntario verificado", weight=ft.FontWeight.BOLD, color="#065F46"),
-                                            ft.Text(
-                                                "Tu foto de rostro y datos ya aparecen en la lista de Voluntarios.",
-                                                size=12,
-                                                color="#065F46",
-                                            ),
+                                            ft.Text("Ya eres guía voluntario verificado", weight=ft.FontWeight.BOLD, color=pal.emerald_text),
+                                            ft.Text("Tu foto de rostro y datos ya aparecen en Voluntarios.", size=12, color=pal.emerald_text),
                                         ],
                                     ),
                                 ],
                             ),
-                            ft.OutlinedButton(
-                                content="Ver lista de Voluntarios",
+                            styled_outlined_button(
+                                pal,
+                                text="Ver lista de Voluntarios",
+                                text_color=pal.emerald_text,
+                                border_color=pal.emerald,
                                 on_click=lambda _: (
                                     setattr(state, "screen", "volunteers"),
                                     render(),
@@ -2735,9 +3485,9 @@ def main(page: ft.Page) -> None:
                 )
             else:
                 volunteer_block = ft.Container(
-                    bgcolor=ft.Colors.WHITE,
+                    bgcolor=pal.card_bg,
                     border_radius=16,
-                    border=ft.Border.all(1, CARD_BORDER),
+                    border=ft.Border.all(1, pal.border),
                     padding=16,
                     content=ft.Column(
                         spacing=10,
@@ -2745,19 +3495,19 @@ def main(page: ft.Page) -> None:
                             ft.Row(
                                 spacing=8,
                                 controls=[
-                                    ft.Icon(ft.Icons.VOLUNTEER_ACTIVISM, color=BLUE_ACTION),
-                                    ft.Text("Postularme como voluntario", size=16, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
+                                    ft.Icon(ft.Icons.VOLUNTEER_ACTIVISM, color=pal.blue_action),
+                                    ft.Text("Postularme como voluntario", size=16, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                                 ],
                             ),
                             ft.Container(
-                                bgcolor=EMERALD_SURFACE if effective_vol_photo else WARN_SURFACE,
+                                bgcolor=pal.emerald_bg if effective_vol_photo else pal.warn_bg,
                                 border_radius=12,
                                 padding=10,
                                 content=ft.Row(
                                     spacing=12,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                     controls=[
-                                        build_face_avatar(effective_vol_photo, size=54, fallback_icon=ft.Icons.PHOTO_CAMERA),
+                                        build_face_avatar(pal, effective_vol_photo, size=54, fallback_icon=ft.Icons.PHOTO_CAMERA),
                                         ft.Column(
                                             expand=True,
                                             spacing=4,
@@ -2768,11 +3518,14 @@ def main(page: ft.Page) -> None:
                                                     else "Foto de rostro OBLIGATORIA",
                                                     size=12,
                                                     weight=ft.FontWeight.BOLD,
-                                                    color="#065F46" if effective_vol_photo else "#92400E",
+                                                    color=pal.emerald_text if effective_vol_photo else pal.warn_text,
                                                 ),
-                                                ft.OutlinedButton(
-                                                    content="Cambiar foto" if effective_vol_photo else "Subir foto de rostro (obligatorio)",
+                                                styled_outlined_button(
+                                                    pal,
+                                                    text="Cambiar foto" if effective_vol_photo else "Subir foto (obligatorio)",
                                                     icon=ft.Icons.ADD_A_PHOTO,
+                                                    text_color=pal.emerald_text if effective_vol_photo else pal.warn_text,
+                                                    border_color=pal.emerald if effective_vol_photo else pal.alert_orange,
                                                     on_click=lambda _: page.run_task(
                                                         pick_face_photo,
                                                         "Selecciona foto de tu rostro (obligatoria para voluntarios)",
@@ -2784,32 +3537,32 @@ def main(page: ft.Page) -> None:
                                     ],
                                 ),
                             ),
-                            ft.TextField(
+                            styled_text_field(
+                                pal,
                                 label="Zona o campus de apoyo",
                                 value=state.vol_zone,
-                                bgcolor=ft.Colors.WHITE,
                                 on_change=lambda e: setattr(state, "vol_zone", e.control.value or ""),
                             ),
-                            ft.TextField(
+                            styled_text_field(
+                                pal,
                                 label="Horario disponible",
                                 value=state.vol_availability,
-                                bgcolor=ft.Colors.WHITE,
                                 on_change=lambda e: setattr(state, "vol_availability", e.control.value or ""),
                             ),
-                            ft.TextField(
+                            styled_text_field(
+                                pal,
                                 label="¿Cómo puedes apoyar?",
                                 value=state.vol_notes,
                                 multiline=True,
-                                bgcolor=ft.Colors.WHITE,
                                 on_change=lambda e: setattr(state, "vol_notes", e.control.value or ""),
                             ),
                             *(
                                 [
                                     ft.Container(
-                                        bgcolor=DANGER_SURFACE,
+                                        bgcolor=pal.danger_bg,
                                         border_radius=10,
                                         padding=10,
-                                        content=ft.Text(state.vol_error, size=12, color=DANGER_RED, weight=ft.FontWeight.W_600),
+                                        content=ft.Text(state.vol_error, size=12, color=pal.danger_text, weight=ft.FontWeight.W_600),
                                     )
                                 ]
                                 if state.vol_error
@@ -2818,7 +3571,7 @@ def main(page: ft.Page) -> None:
                             ft.FilledButton(
                                 content="Enviar postulación de voluntario",
                                 icon=ft.Icons.VOLUNTEER_ACTIVISM,
-                                bgcolor=EMERALD_GREEN,
+                                bgcolor=pal.emerald,
                                 color=ft.Colors.WHITE,
                                 width=float("inf"),
                                 height=46,
@@ -2839,12 +3592,12 @@ def main(page: ft.Page) -> None:
                         ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
-                                ft.Text("Mi Perfil", size=20, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                build_sos_pill(),
+                                ft.Text("Mi Perfil", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                             ],
                         ),
                         ft.Container(
-                            bgcolor=INDIGO_DARK,
+                            bgcolor=pal.indigo,
                             border_radius=18,
                             padding=16,
                             content=ft.Column(
@@ -2854,26 +3607,24 @@ def main(page: ft.Page) -> None:
                                         spacing=12,
                                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                         controls=[
-                                            build_face_avatar(user.get("face_photo_base64"), size=60),
+                                            build_face_avatar(pal, user.get("face_photo_base64"), size=60),
                                             ft.Column(
                                                 expand=True,
                                                 spacing=2,
                                                 controls=[
                                                     ft.Text(user["username"], size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
                                                     ft.Text(f"Correo: {user['email']}", size=12, color="#BFDBFE"),
-                                                    ft.Text(
-                                                        f"Discapacidades: {format_disabilities_label(state.disabilities)}",
-                                                        size=11,
-                                                        color=EMERALD_SURFACE,
-                                                    ),
+                                                    ft.Text(f"Discapacidades: {format_disabilities_label(state.disabilities)}", size=11, color="#A7F3D0"),
                                                 ],
                                             ),
                                         ],
                                     ),
-                                    ft.OutlinedButton(
-                                        content="Cambiar foto de perfil (opcional)" if user.get("face_photo_base64") else "Agregar foto de perfil (opcional)",
+                                    styled_outlined_button(
+                                        pal,
+                                        text="Cambiar foto de perfil (opcional)" if user.get("face_photo_base64") else "Agregar foto de perfil (opcional)",
                                         icon=ft.Icons.CAMERA_ALT,
-                                        icon_color=ft.Colors.WHITE,
+                                        text_color=ft.Colors.WHITE,
+                                        border_color="#93C5FD",
                                         on_click=lambda _: page.run_task(
                                             pick_face_photo,
                                             "Selecciona tu foto de perfil (opcional)",
@@ -2886,44 +3637,55 @@ def main(page: ft.Page) -> None:
                         *(
                             [
                                 ft.Container(
-                                    bgcolor=EMERALD_SURFACE,
+                                    bgcolor=pal.emerald_bg,
                                     border_radius=10,
                                     padding=10,
-                                    content=ft.Text(state.auth_feedback, size=12, color="#065F46", weight=ft.FontWeight.W_600),
+                                    content=ft.Text(state.auth_feedback, size=12, color=pal.emerald_text, weight=ft.FontWeight.W_600),
                                 )
                             ]
                             if state.auth_feedback
                             else []
                         ),
                         ft.Container(
-                            bgcolor=ft.Colors.WHITE,
+                            bgcolor=pal.card_bg,
                             border_radius=16,
-                            border=ft.Border.all(1, CARD_BORDER),
+                            border=ft.Border.all(1, pal.border),
+                            padding=14,
+                            content=ft.Switch(
+                                label="Modo noche / oscuro de alto contraste",
+                                value=state.dark_mode,
+                                active_color=pal.blue_action,
+                                on_change=lambda e: (setattr(state, "dark_mode", bool(e.control.value)), render()),
+                            ),
+                        ),
+                        ft.Container(
+                            bgcolor=pal.card_bg,
+                            border_radius=16,
+                            border=ft.Border.all(1, pal.border),
                             padding=16,
                             content=ft.Column(
                                 spacing=8,
                                 controls=[
-                                    ft.Text("Discapacidades activas (puedes elegir varias)", size=14, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                                    ft.Text(
-                                        "Cada combinación recalcula rutas, pasos y tiempos estimados.",
-                                        size=12,
-                                        color=TEXT_MUTED,
-                                    ),
+                                    ft.Text("Discapacidades activas (puedes elegir varias)", size=14, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                                    ft.Text("Cada combinación recalcula rutas, pasos y modo de voz/visual.", size=12, color=pal.text_muted),
                                     build_multi_disability_chips(),
                                 ],
                             ),
                         ),
                         ft.Container(
-                            bgcolor=ft.Colors.WHITE,
+                            bgcolor=pal.card_bg,
                             border_radius=16,
-                            border=ft.Border.all(1, CARD_BORDER),
+                            border=ft.Border.all(1, pal.border),
                             padding=16,
                             content=ft.Column(spacing=10, controls=minor_section_controls),
                         ),
                         volunteer_block,
-                        ft.OutlinedButton(
-                            content="Cerrar sesión",
+                        styled_outlined_button(
+                            pal,
+                            text="Cerrar sesión",
                             icon=ft.Icons.LOGOUT,
+                            text_color=pal.danger_red,
+                            border_color=pal.danger_red,
                             width=float("inf"),
                             height=44,
                             on_click=logout,
@@ -2932,7 +3694,7 @@ def main(page: ft.Page) -> None:
                 ),
             )
 
-        # --- Caso B: Sin sesión iniciada (Crear perfil / Iniciar sesión) ---
+        # --- Caso B: Sin sesión iniciada ---
         is_register = state.auth_mode == "register"
 
         def on_reg_photo_picked(b64: str, filename: str) -> None:
@@ -3059,8 +3821,8 @@ def main(page: ft.Page) -> None:
                     ft.FilledButton(
                         content="Crear perfil",
                         expand=True,
-                        bgcolor=INDIGO_DARK if is_register else "#E5E7EB",
-                        color=ft.Colors.WHITE if is_register else INDIGO_DARK,
+                        bgcolor=pal.chip_active_bg if is_register else pal.card_alt,
+                        color=pal.chip_active_text if is_register else pal.text_primary,
                         on_click=lambda _: (
                             setattr(state, "auth_mode", "register"),
                             setattr(state, "auth_error", None),
@@ -3070,8 +3832,8 @@ def main(page: ft.Page) -> None:
                     ft.FilledButton(
                         content="Iniciar sesión",
                         expand=True,
-                        bgcolor=INDIGO_DARK if not is_register else "#E5E7EB",
-                        color=ft.Colors.WHITE if not is_register else INDIGO_DARK,
+                        bgcolor=pal.chip_active_bg if not is_register else pal.card_alt,
+                        color=pal.chip_active_text if not is_register else pal.text_primary,
                         on_click=lambda _: (
                             setattr(state, "auth_mode", "login"),
                             setattr(state, "auth_error", None),
@@ -3080,66 +3842,64 @@ def main(page: ft.Page) -> None:
                     ),
                 ],
             ),
-            ft.TextField(
+            styled_text_field(
+                pal,
                 label="Nombre de usuario" if is_register else "Usuario o correo electrónico",
                 value=state.reg_username,
                 prefix_icon=ft.Icons.PERSON,
-                bgcolor=ft.Colors.WHITE,
                 on_change=lambda e: setattr(state, "reg_username", e.control.value or ""),
             ),
         ]
 
         if is_register:
             form_controls.append(
-                ft.TextField(
+                styled_text_field(
+                    pal,
                     label="Correo electrónico vinculado",
                     value=state.reg_email,
                     prefix_icon=ft.Icons.EMAIL,
-                    bgcolor=ft.Colors.WHITE,
                     on_change=lambda e: setattr(state, "reg_email", e.control.value or ""),
                 )
             )
 
         form_controls.append(
-            ft.TextField(
+            styled_text_field(
+                pal,
                 label="Contraseña (mín. 6 caracteres)",
                 value=state.reg_password,
                 prefix_icon=ft.Icons.LOCK,
                 password=True,
                 can_reveal_password=True,
-                bgcolor=ft.Colors.WHITE,
                 on_change=lambda e: setattr(state, "reg_password", e.control.value or ""),
             )
         )
 
         if is_register:
-            # Foto de perfil OPCIONAL para usuarios
             form_controls.append(
                 ft.Container(
-                    bgcolor=NEUTRAL_BG,
+                    bgcolor=pal.card_alt,
                     border_radius=12,
                     padding=10,
                     content=ft.Row(
                         spacing=10,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            build_face_avatar(state.reg_photo_b64, size=48),
+                            build_face_avatar(pal, state.reg_photo_b64, size=48),
                             ft.Column(
                                 expand=True,
                                 spacing=4,
                                 controls=[
                                     ft.Text(
-                                        f"Foto seleccionada: {state.reg_photo_name}"
-                                        if state.reg_photo_b64
-                                        else "Foto de rostro (opcional para usuarios)",
+                                        f"Foto: {state.reg_photo_name}" if state.reg_photo_b64 else "Foto de rostro (opcional para usuarios)",
                                         size=12,
-                                        color=INDIGO_DARK,
+                                        color=pal.text_primary,
                                     ),
                                     ft.Row(
                                         spacing=6,
                                         controls=[
-                                            ft.OutlinedButton(
-                                                content="Subir foto (opcional)",
+                                            styled_outlined_button(
+                                                pal,
+                                                text="Subir foto (opcional)",
                                                 icon=ft.Icons.CAMERA_ALT,
                                                 on_click=lambda _: page.run_task(
                                                     pick_face_photo,
@@ -3150,7 +3910,7 @@ def main(page: ft.Page) -> None:
                                             *(
                                                 [
                                                     ft.TextButton(
-                                                        content="Quitar",
+                                                        content=ft.Text("Quitar", color=pal.danger_red),
                                                         on_click=lambda _: (
                                                             setattr(state, "reg_photo_b64", None),
                                                             setattr(state, "reg_photo_name", None),
@@ -3170,33 +3930,23 @@ def main(page: ft.Page) -> None:
                 )
             )
 
-            # Múltiples discapacidades
             form_controls.extend(
                 [
-                    ft.Text(
-                        "Selecciona una o más discapacidades (rutas personalizadas):",
-                        size=12,
-                        weight=ft.FontWeight.W_600,
-                        color=INDIGO_DARK,
-                    ),
+                    ft.Text("Selecciona una o más discapacidades:", size=12, weight=ft.FontWeight.W_600, color=pal.text_heading),
                     build_multi_disability_chips(),
+                    ft.Switch(
+                        label="Soy menor de edad (ubicación en tiempo real a familiar)",
+                        value=state.reg_is_minor,
+                        active_color=pal.blue_action,
+                        on_change=lambda e: (setattr(state, "reg_is_minor", bool(e.control.value)), render()),
+                    ),
                 ]
-            )
-
-            # Switch de menor de edad + familiar registrado
-            form_controls.append(
-                ft.Switch(
-                    label="Soy menor de edad (compartir ubicación en tiempo real a familiar)",
-                    value=state.reg_is_minor,
-                    active_color=BLUE_ACTION,
-                    on_change=lambda e: (setattr(state, "reg_is_minor", bool(e.control.value)), render()),
-                )
             )
 
             if state.reg_is_minor:
                 form_controls.append(
                     ft.Container(
-                        bgcolor=INFO_BLUE_BG,
+                        bgcolor=pal.info_bg,
                         border_radius=12,
                         padding=12,
                         content=ft.Column(
@@ -3205,37 +3955,32 @@ def main(page: ft.Page) -> None:
                                 ft.Row(
                                     spacing=6,
                                     controls=[
-                                        ft.Icon(ft.Icons.FAMILY_RESTROOM, color=BLUE_ACTION, size=18),
-                                        ft.Text(
-                                            "Familiar / Tutor registrado",
-                                            size=13,
-                                            weight=ft.FontWeight.BOLD,
-                                            color=INDIGO_DARK,
-                                        ),
+                                        ft.Icon(ft.Icons.FAMILY_RESTROOM, color=pal.info_text, size=18),
+                                        ft.Text("Familiar / Tutor registrado", size=13, weight=ft.FontWeight.BOLD, color=pal.info_text),
                                     ],
                                 ),
-                                ft.TextField(
+                                styled_text_field(
+                                    pal,
                                     label="Nombre del familiar *",
                                     value=state.reg_guardian_name,
-                                    bgcolor=ft.Colors.WHITE,
                                     on_change=lambda e: setattr(state, "reg_guardian_name", e.control.value or ""),
                                 ),
-                                ft.TextField(
+                                styled_text_field(
+                                    pal,
                                     label="Parentesco",
                                     value=state.reg_guardian_relation,
-                                    bgcolor=ft.Colors.WHITE,
                                     on_change=lambda e: setattr(state, "reg_guardian_relation", e.control.value or ""),
                                 ),
-                                ft.TextField(
+                                styled_text_field(
+                                    pal,
                                     label="Teléfono del familiar *",
                                     value=state.reg_guardian_phone,
-                                    bgcolor=ft.Colors.WHITE,
                                     on_change=lambda e: setattr(state, "reg_guardian_phone", e.control.value or ""),
                                 ),
-                                ft.TextField(
+                                styled_text_field(
+                                    pal,
                                     label="Correo del familiar (opcional)",
                                     value=state.reg_guardian_email,
-                                    bgcolor=ft.Colors.WHITE,
                                     on_change=lambda e: setattr(state, "reg_guardian_email", e.control.value or ""),
                                 ),
                             ],
@@ -3246,20 +3991,20 @@ def main(page: ft.Page) -> None:
         if state.auth_error:
             form_controls.append(
                 ft.Container(
-                    bgcolor=DANGER_SURFACE,
+                    bgcolor=pal.danger_bg,
                     border_radius=10,
                     padding=10,
-                    content=ft.Text(state.auth_error, size=12, color=DANGER_RED, weight=ft.FontWeight.W_600),
+                    content=ft.Text(state.auth_error, size=12, color=pal.danger_text, weight=ft.FontWeight.W_600),
                 )
             )
 
         if state.auth_feedback:
             form_controls.append(
                 ft.Container(
-                    bgcolor=EMERALD_SURFACE,
+                    bgcolor=pal.emerald_bg,
                     border_radius=10,
                     padding=10,
-                    content=ft.Text(state.auth_feedback, size=12, color="#065F46"),
+                    content=ft.Text(state.auth_feedback, size=12, color=pal.emerald_text),
                 )
             )
 
@@ -3267,7 +4012,7 @@ def main(page: ft.Page) -> None:
             ft.FilledButton(
                 content="Crear cuenta y vincular correo" if is_register else "Entrar a mi perfil",
                 icon=ft.Icons.PERSON_ADD if is_register else ft.Icons.LOGIN,
-                bgcolor=BLUE_ACTION,
+                bgcolor=pal.blue_action,
                 color=ft.Colors.WHITE,
                 width=float("inf"),
                 height=46,
@@ -3286,19 +4031,19 @@ def main(page: ft.Page) -> None:
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Text("Perfil de Usuario", size=20, weight=ft.FontWeight.BOLD, color=INDIGO_DARK),
-                            build_sos_pill(),
+                            ft.Text("Perfil de Usuario", size=20, weight=ft.FontWeight.BOLD, color=pal.text_heading),
+                            ft.Row(spacing=6, controls=[build_theme_toggle(), build_sos_pill()]),
                         ],
                     ),
                     ft.Text(
                         "Crea tu cuenta con correo vinculado, elige una o más discapacidades y postúlate como voluntario con foto de rostro.",
                         size=12,
-                        color=TEXT_MUTED,
+                        color=pal.text_muted,
                     ),
                     ft.Container(
-                        bgcolor=ft.Colors.WHITE,
+                        bgcolor=pal.card_bg,
                         border_radius=18,
-                        border=ft.Border.all(1, CARD_BORDER),
+                        border=ft.Border.all(1, pal.border),
                         padding=16,
                         content=ft.Column(spacing=12, controls=form_controls),
                     ),
@@ -3307,9 +4052,10 @@ def main(page: ft.Page) -> None:
         )
 
     # -----------------------------------------------------------------------
-    # Router principal de pantallas
+    # Router principal
     # -----------------------------------------------------------------------
     def render() -> None:
+        apply_page_theme()
         page.controls.clear()
         if state.screen == "onboarding":
             page.navigation_bar = None

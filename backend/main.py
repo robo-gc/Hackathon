@@ -34,6 +34,7 @@ from models import (
     IncidentRecord,
     LostMinorAlertRequest,
     LostMinorAlertResponse,
+    NavigationStep,
     RiskLevel,
     RouteEstimate,
     UpdateDisabilityRequest,
@@ -132,6 +133,228 @@ def parse_profiles_query(
     return normalize_disabilities(parsed, profile)
 
 
+def build_navigation_steps_for_disabilities(
+    destination: str,
+    disabilities: List[AccessibilityProfile],
+) -> List[NavigationStep]:
+    """Construye instrucciones paso a paso adaptadas a cada discapacidad (sin depender de sonido si es auditivo)."""
+    active = normalize_disabilities(disabilities)
+    has_auditivo = AccessibilityProfile.AUDITIVO in active
+    primary = active[0]
+
+    # Instrucciones base adaptadas a la discapacidad principal
+    if primary == AccessibilityProfile.AUDITIVO:
+        raw_steps = [
+            (
+                "straight",
+                90,
+                "Sigue derecho 90 m · Corredor visible",
+                "Banqueta despejada con señalización visual de alto contraste. Verifica salidas vehiculares a tu derecha.",
+                "",
+                "ALERTA VISUAL: Banqueta libre · Mantén visibilidad frontal",
+            ),
+            (
+                "right",
+                70,
+                "Gira a la derecha en 70 m · Semáforo peatonal",
+                "Encontrarás un cruce con semáforo peatonal luminoso verde y espejo vial panorámico.",
+                "",
+                "SEMÁFORO LUMINOSO: Espera figura verde fija y mira ambos lados",
+            ),
+            (
+                "straight",
+                50,
+                "Cruza y avanza 50 m · Sin bloqueos",
+                "Paso peatonal amplio y bien iluminado; alertas visuales activas en pantalla cada 10 minutos.",
+                "",
+                "AVANCE SEGURO: Señalización clara hacia tu destino",
+            ),
+            (
+                "arrive",
+                0,
+                f"Llegaste a {destination}",
+                "Entrada principal visible al frente con letrero de acceso.",
+                "",
+                "DESTINO ALCANZADO · Recorrido finalizado",
+            ),
+        ]
+    elif primary == AccessibilityProfile.VISUAL:
+        raw_steps = [
+            (
+                "straight",
+                80,
+                "Sigue derecho 80 m · Guía podotáctil",
+                "Avanza recto siguiendo la línea podotáctil en el piso; mantente a la izquierda de los postes.",
+                (
+                    ""
+                    if has_auditivo
+                    else "Sigue derecho ochenta metros guiándote por la línea podotáctil del piso. Mantente ligeramente a tu izquierda para evitar postes."
+                ),
+                "Guía podotáctil continua · 80 m recto",
+            ),
+            (
+                "right",
+                60,
+                "Gira a la derecha en 60 m · Cruce seguro",
+                (
+                    "Cruce peatonal señalado con línea táctil de advertencia antes de la esquina."
+                    if has_auditivo
+                    else "A sesenta metros encontrarás un semáforo sonoro en Avenida Universidad; espera el tono rápido para cruzar."
+                ),
+                (
+                    ""
+                    if has_auditivo
+                    else "En sesenta metros gira a la derecha. Encontrarás un semáforo sonoro en Avenida Universidad; espera el tono rápido para cruzar con seguridad."
+                ),
+                "Semáforo peatonal accesible · Gira derecha",
+            ),
+            (
+                "straight",
+                45,
+                "Continúa 45 m · Banqueta despejada",
+                "Tramo recto sin obras ni obstáculos a nivel del suelo.",
+                "" if has_auditivo else "Continúa derecho cuarenta y cinco metros. La banqueta está despejada y sin obras reportadas.",
+                "Banqueta libre de obstáculos · 45 m",
+            ),
+            (
+                "arrive",
+                0,
+                f"Has llegado a {destination}",
+                "La puerta principal está a 5 metros directamente frente a ti.",
+                "" if has_auditivo else f"Has llegado a {destination}. La entrada principal está a cinco metros directamente frente a ti.",
+                "Llegada confirmada · Acceso al frente",
+            ),
+        ]
+    elif primary == AccessibilityProfile.MOVILIDAD_REDUCIDA:
+        raw_steps = [
+            (
+                "straight",
+                70,
+                "Avanza 70 m · Andador plano con barandal",
+                "Camina a tu ritmo por el tramo nivelado sin escalones; cuentas con barandal de apoyo a tu derecha.",
+                "" if has_auditivo else "Avanza despacio setenta metros por el andador plano. Encontrarás un barandal de apoyo a tu derecha y superficie pareja.",
+                "Andador plano con barandal · 70 m",
+            ),
+            (
+                "right",
+                50,
+                "Gira a la derecha en 50 m · Banca con sombra",
+                "Encontrarás una banca con sombra en la esquina por si deseas tomar un descanso.",
+                "" if has_auditivo else "En cincuenta metros gira a la derecha. Encontrarás una banca con sombra justo en la esquina por si necesitas descansar.",
+                "Zona de descanso con banca disponible",
+            ),
+            (
+                "straight",
+                40,
+                "Continúa 40 m · Acceso sin escaleras",
+                "Pendiente suave menor al 4% directo hacia la entrada preferente.",
+                "" if has_auditivo else "Continúa cuarenta metros por una pendiente suave sin escaleras hacia el acceso preferente.",
+                "Pendiente suave · Sin escaleras",
+            ),
+            (
+                "arrive",
+                0,
+                f"Llegaste a {destination}",
+                "Acceso preferente a nivel de calle justo frente a ti.",
+                "" if has_auditivo else f"Has llegado a {destination}. Tienes el acceso preferente a nivel de calle frente a ti.",
+                "Destino alcanzado · Acceso preferente",
+            ),
+        ]
+    elif primary == AccessibilityProfile.NEURODIVERGENTE:
+        raw_steps = [
+            (
+                "straight",
+                80,
+                "Paso 1: Camina recto 80 m · Calle tranquila",
+                "Calle arbolada con bajo ruido vehicular y espacio amplio para caminar sin prisas.",
+                "" if has_auditivo else "Paso uno de cuatro. Camina recto ochenta metros por la calle arbolada. Es una zona tranquila con poco ruido.",
+                "Zona tranquila · Baja estimulación",
+            ),
+            (
+                "right",
+                60,
+                "Paso 2: Gira a la derecha en 60 m",
+                "Gira en la esquina del parque. Evitamos la avenida con obras ruidosas.",
+                "" if has_auditivo else "Paso dos de cuatro. Gira a la derecha en sesenta metros en la esquina del parque. Evitamos la zona de obras ruidosas.",
+                "Desvío tranquilo · Sin obras ruidosas",
+            ),
+            (
+                "straight",
+                40,
+                "Paso 3: Cruza con calma · 40 m al frente",
+                "Cruce amplio y ordenado con poco flujo de personas.",
+                "" if has_auditivo else "Paso tres de cuatro. Cruce amplio y ordenado en cuarenta metros. Avanza a tu propio ritmo.",
+                "Paso ordenado · Poco flujo peatonal",
+            ),
+            (
+                "arrive",
+                0,
+                f"Paso 4: Llegaste a {destination}",
+                "Entrada señalizada con zona de espera tranquila adentro.",
+                "" if has_auditivo else f"Paso cuatro de cuatro. Llegaste a {destination}. Encontrarás la entrada tranquila frente a ti.",
+                "Recorrido completado con calma",
+            ),
+        ]
+    else:  # SILLA_DE_RUEDAS
+        raw_steps = [
+            (
+                "straight",
+                80,
+                "Sigue derecho 80 m · Rampa disponible",
+                "Banqueta norte ancha de Av. Universidad con rampa continua y superficie firme.",
+                "" if has_auditivo else "Sigue derecho ochenta metros por la banqueta norte. Encontrarás una rampa amplia sin escalones.",
+                "Banqueta ancha · Rampa disponible",
+            ),
+            (
+                "right",
+                65,
+                "Gira a la derecha en 65 m · Desvío de obstáculo",
+                "Rodeamos la rampa bloqueada reportada en la esquina; paso libre de escalones.",
+                "" if has_auditivo else "Gira a la derecha en sesenta y cinco metros. Evitamos la rampa bloqueada reportada en la esquina.",
+                "Obstáculo evitado · Ruta sin escalones",
+            ),
+            (
+                "left",
+                45,
+                "Gira a la izquierda en 45 m · Cruce a nivel",
+                "Paso peatonal con rampa en ambos extremos hacia la entrada principal.",
+                "" if has_auditivo else "Gira a la izquierda en cuarenta y cinco metros. Encontrarás un cruce peatonal a nivel de calle con rampa en ambos lados.",
+                "Cruce a nivel · Rampa verificada",
+            ),
+            (
+                "arrive",
+                0,
+                f"Llegaste a {destination}",
+                "Rampa principal de acceso y puerta amplia frente a ti.",
+                "" if has_auditivo else f"Has llegado a {destination}. La rampa principal de acceso está justo frente a ti.",
+                "Llegada accesible · Rampa al frente",
+            ),
+        ]
+
+    # Añade notas combinadas si el usuario seleccionó más de una discapacidad
+    extra_notes = [
+        PROFILE_ROUTING_CONFIG[d]["summary"]
+        for d in active[1:]
+    ]
+    extra_suffix = (" | Extra: " + " ".join(extra_notes)) if extra_notes else ""
+
+    steps: List[NavigationStep] = []
+    for idx, (direction, dist_m, headline, detail, spoken, visual) in enumerate(raw_steps, start=1):
+        full_detail = f"{detail}{extra_suffix}" if idx == 1 and extra_suffix else detail
+        steps.append(
+            NavigationStep(
+                step_number=idx,
+                direction=direction,
+                distance_meters=dist_m,
+                headline=headline,
+                detail=full_detail,
+                spoken_text=spoken,
+                visual_cue=visual,
+            )
+        )
+    return steps
+
+
 def compute_route_for_disabilities(
     dest_id: str,
     destination: str,
@@ -144,8 +367,6 @@ def compute_route_for_disabilities(
     active = normalize_disabilities(disabilities)
     configs = [PROFILE_ROUTING_CONFIG[d] for d in active]
 
-    # Al combinar múltiples discapacidades se aplica el criterio más seguro/conservador
-    # más un pequeño margen adicional (3% por restricción extra) por desvíos combinados.
     extra_margin = 1.0 + 0.03 * max(0, len(active) - 1)
     distance_factor = max(c["distance_factor"] for c in configs) * extra_margin
     minutes_per_km = max(c["minutes_per_km"] for c in configs)
@@ -162,6 +383,8 @@ def compute_route_for_disabilities(
     prefixes = " + ".join(c["route_prefix"] for c in configs)
     summary = " ".join(c["summary"] for c in configs)
     steps = [c["step"] for c in configs] + [f"Llegada accesible verificada a {destination}."]
+    nav_steps = build_navigation_steps_for_disabilities(destination, active)
+    voice_ok = AccessibilityProfile.AUDITIVO not in active
 
     return RouteEstimate(
         id=dest_id,
@@ -177,7 +400,9 @@ def compute_route_for_disabilities(
         distance_text=dist_text,
         estimated_minutes=est_minutes,
         accessibility_summary=summary,
+        voice_guidance_recommended=voice_ok,
         steps=steps,
+        navigation_steps=nav_steps,
     )
 
 
