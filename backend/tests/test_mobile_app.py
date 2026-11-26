@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sys
 from pathlib import Path
@@ -35,26 +36,33 @@ def test_no_java_or_jvm_files_in_repo() -> None:
     assert found == [], f"Se encontraron archivos prohibidos JVM/Java: {found}"
 
 
-def test_mobile_routes_clinics_volunteers_and_render() -> None:
-    """Verifica rutas independientes, clínicas completas, voluntarios vacíos y renderizado Flet."""
+def test_mobile_multi_disability_siren_avatar_and_all_screens() -> None:
+    """Verifica multi-discapacidad, sirena WAV, avatar con foto, historial y todas las pantallas."""
     mobile_main = _load_mobile_module()
 
-    assert len(mobile_main.PROFILES) == 5
-    sugg_wheelchair = mobile_main.build_local_suggestions("silla_de_ruedas")
-    sugg_auditivo = mobile_main.build_local_suggestions("auditivo")
-    assert sugg_wheelchair[0]["route_name"] != sugg_auditivo[0]["route_name"]
-    assert sugg_wheelchair[-1]["estimated_minutes"] != sugg_auditivo[-1]["estimated_minutes"]
+    # 1) Múltiples discapacidades generan rutas combinadas y tiempos distintos
+    sugg_single = mobile_main.build_local_suggestions(["auditivo"])
+    sugg_multi = mobile_main.build_local_suggestions(["silla_de_ruedas", "visual", "neurodivergente"])
+    assert len(sugg_multi[0]["disabilities"]) == 3
+    assert sugg_multi[-1]["estimated_minutes"] > sugg_single[-1]["estimated_minutes"]
 
-    clinics = mobile_main.build_local_clinics("visual")
-    assert len(clinics) >= 3
-    assert all(c["requirements_to_bring"] for c in clinics)
-    assert all(c["estimated_minutes"] > 0 for c in clinics)
+    # 2) Sirena WAV sintetizada en memoria correctamente (RIFF WAVE header)
+    wav_bytes = mobile_main.generate_alert_siren_wav()
+    assert wav_bytes[:4] == b"RIFF"
+    assert wav_bytes[8:12] == b"WAVE"
+    assert len(wav_bytes) > 10_000
 
-    # Lista de voluntarios empieza vacía por defecto
+    # 3) Avatar renderiza foto real en base64 y fallback sin foto
+    sample_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 32).decode("ascii")
+    assert mobile_main.build_face_avatar(sample_b64, size=60) is not None
+    assert mobile_main.build_face_avatar(None, size=60) is not None
+
+    # 4) Lista de voluntarios empieza vacía e historial tiene registros iniciales
     state = mobile_main.AppState()
     assert state.volunteers == []
+    assert len(state.incidents) >= 2
 
-    # Renderizado inicial en Flet 1.x sin errores
+    # 5) Renderizado de todas las pestañas de la app Flet sin errores
     updates = {"count": 0}
     controls: List[Any] = []
     fake_page = SimpleNamespace(
@@ -71,4 +79,17 @@ def test_mobile_routes_clinics_volunteers_and_render() -> None:
     )
     mobile_main.main(fake_page)
     assert len(fake_page.controls) == 1
-    assert updates["count"] == 1
+
+    # Ir a Explorar rutas -> recorrer las 5 pestañas (Mapa, Incidencias, Clínicas, Voluntarios, Perfil)
+    onboarding_col = fake_page.controls[0].content
+    for ctrl in onboarding_col.controls:
+        if hasattr(ctrl, "content") and ctrl.content == "Continuar al mapa":
+            ctrl.on_click(None)
+            break
+    assert fake_page.navigation_bar is not None
+
+    for tab_idx in (1, 2, 3, 4, 0):
+        fake_page.navigation_bar.on_change(
+            SimpleNamespace(control=SimpleNamespace(selected_index=tab_idx))
+        )
+        assert len(fake_page.controls) == 1

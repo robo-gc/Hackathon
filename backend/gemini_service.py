@@ -4,8 +4,7 @@ Sigue las mejores prácticas del SDK oficial `google-genai >= 3.5.0`:
 - Usa `client.interactions.create(...)` con el modelo `gemini-4-hydrogen`.
 - Combina grounding con Google Search (`{"type": "google_search"}`) para obtener
   clima, bloqueos, transporte fuera de servicio e incidencias reales del entorno.
-- Usa Structured Outputs (`response_format`) para devolver JSON validado por Pydantic
-  directamente consumible por la aplicación Android.
+- Adapta recomendaciones a una o múltiples discapacidades simultáneamente.
 - Mantiene caché de 10 minutos (600 s) y fallback claro sin conexión / sin API key.
 """
 
@@ -29,12 +28,13 @@ from models import (
     IncidentRecord,
     RiskLevel,
     SourceCitation,
+    normalize_disabilities,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gemini-4-hydrogen"
-DEFAULT_CACHE_TTL_SECONDS = 600  # 10 minutos, según especificación de Map Inclusive
+DEFAULT_CACHE_TTL_SECONDS = 600  # 10 minutos
 
 PROFILE_GUIDANCE: Dict[AccessibilityProfile, str] = {
     AccessibilityProfile.SILLA_DE_RUEDAS: (
@@ -88,7 +88,7 @@ class GeminiEnvironmentService:
         self._client: Optional[genai.Client] = (
             genai.Client(api_key=self.api_key) if self.api_key else None
         )
-        self._cache: Dict[Tuple[str, str, str, int], Tuple[float, EnvironmentCheckResponse]] = {}
+        self._cache: Dict[Tuple[str, str, Tuple[str, ...], int], Tuple[float, EnvironmentCheckResponse]] = {}
 
     @property
     def is_live_enabled(self) -> bool:
@@ -104,10 +104,11 @@ class GeminiEnvironmentService:
     ) -> EnvironmentCheckResponse:
         """Consulta el entorno urbano actual y el destino final con actualización cada 10 min."""
         incidents = active_incidents or []
+        disabilities = normalize_disabilities(req.disabilities, req.profile)
         cache_key = (
             req.origin.strip().lower(),
             req.destination.strip().lower(),
-            req.profile.value,
+            tuple(sorted(d.value for d in disabilities)),
             len(incidents),
         )
 
@@ -120,6 +121,7 @@ class GeminiEnvironmentService:
         if not self._client:
             response = self._build_offline_demo_response(
                 req=req,
+                disabilities=disabilities,
                 incidents=incidents,
                 reason="Modo prueba local (configura GEMINI_API_KEY para datos web en vivo).",
             )
@@ -127,11 +129,12 @@ class GeminiEnvironmentService:
             return response
 
         try:
-            response = self._query_gemini_live(req, incidents)
+            response = self._query_gemini_live(req, disabilities, incidents)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Fallo al consultar Gemini API, activando fallback: %s", exc)
             response = self._build_offline_demo_response(
                 req=req,
+                disabilities=disabilities,
                 incidents=incidents,
                 reason="Sin conexión con Gemini; mostrando estado preventivo en caché local.",
             )
@@ -142,17 +145,21 @@ class GeminiEnvironmentService:
     def _query_gemini_live(
         self,
         req: EnvironmentCheckRequest,
+        disabilities: List[AccessibilityProfile],
         incidents: List[IncidentRecord],
     ) -> EnvironmentCheckResponse:
         assert self._client is not None
 
-        profile_label = PROFILE_LABELS[req.profile]
-        profile_rules = PROFILE_GUIDANCE[req.profile]
+        labels = [PROFILE_LABELS[d] for d in disabilities]
+        combined_label = " + ".join(labels)
+        combined_rules = "\n".join(
+            f"- {PROFILE_LABELS[d]}: {PROFILE_GUIDANCE[d]}" for d in disabilities
+        )
         now_iso = datetime.now(timezone.utc).isoformat()
 
         incidents_text = (
             "\n".join(
-                f"- {inc.title} en {inc.location} (perfil: {inc.profile.value}, severidad: {inc.severity.value}): {inc.description}"
+                f"- {inc.title} en {inc.location} (severidad: {inc.severity.value}): {inc.description}"
                 for inc in incidents
             )
             if incidents
@@ -171,14 +178,15 @@ class GeminiEnvironmentService:
             "Tu tarea es consultar información actual en internet sobre clima, bloqueos viales o "
             "peatonales, transporte público fuera de servicio e incidencias urbanas entre el origen "
             "y el destino, y traducirla en alertas claras, empáticas y concisas en español.\n"
-            f"Regla de accesibilidad para el usuario actual ({profile_label}): {profile_rules}\n"
-            "Devuelve únicamente JSON válido conforme al esquema solicitado. "
-            "Si no encuentras bloqueos o fallas de transporte activas en este momento, indícalo con claridad."
+            f"El usuario tiene las siguientes necesidades/discapacidades activas ({combined_label}):\n"
+            f"{combined_rules}\n"
+            "Asegúrate de incluir recomendaciones útiles que cubran TODAS las discapacidades listadas. "
+            "Devuelve únicamente JSON válido conforme al esquema solicitado."
         )
 
         user_prompt = (
             f"Fecha y hora actual (UTC): {now_iso}\n"
-            f"Perfil del usuario: {profile_label}\n"
+            f"Discapacidades del usuario: {combined_label}\n"
             f"Origen: {req.origin}\n"
             f"Destino: {req.destination}\n"
             f"{coords_text}\n"
@@ -187,7 +195,7 @@ class GeminiEnvironmentService:
             "1) Clima actual en la zona del origen y destino.\n"
             "2) Bloqueos viales, marchas, cierres peatonales u obras.\n"
             "3) Estaciones de Metro, Metrobús o rutas de transporte fuera de servicio.\n"
-            "4) Recomendaciones concretas adaptadas al perfil de accesibilidad."
+            "4) Recomendaciones concretas que atiendan en conjunto todas las discapacidades seleccionadas."
         )
 
         interaction = self._client.interactions.create(
@@ -215,8 +223,10 @@ class GeminiEnvironmentService:
         return EnvironmentCheckResponse(
             origin=req.origin,
             destination=req.destination,
-            profile=req.profile,
-            profile_label=profile_label,
+            profile=disabilities[0],
+            profile_label=combined_label,
+            disabilities=disabilities,
+            disabilities_labels=labels,
             status_mode="gemini_live",
             from_cache=False,
             model_used=self.model,
@@ -238,19 +248,20 @@ class GeminiEnvironmentService:
         title: str,
         description: str,
         location: str,
-        profile: AccessibilityProfile,
+        disabilities: List[AccessibilityProfile],
     ) -> Tuple[RiskLevel, str]:
         """Evalúa severidad y recomendación corta para un nuevo reporte ciudadano."""
+        labels = ", ".join(PROFILE_LABELS[d] for d in disabilities)
         if not self._client:
             lowered = f"{title} {description}".lower()
-            if any(k in lowered for k in ("bloque", "cerrad", "peligr", "inund", "sin luz")):
+            if any(k in lowered for k in ("bloque", "cerrad", "peligr", "inund", "sin luz", "obra")):
                 return (
                     RiskLevel.ALTO,
-                    f"Evita {location}; usa ruta alterna accesible y solicita guía voluntaria si lo necesitas.",
+                    f"Evita {location} ({labels}); usa ruta alterna accesible y activa alertas en camino.",
                 )
             return (
                 RiskLevel.MEDIO,
-                f"Precaución al transitar por {location}; incidencia registrada para la comunidad.",
+                f"Precaución al transitar por {location}; incidencia registrada para {labels}.",
             )
 
         try:
@@ -264,7 +275,7 @@ class GeminiEnvironmentService:
                     f"Incidencia: {title}\n"
                     f"Descripción: {description or 'Sin detalles adicionales'}\n"
                     f"Ubicación: {location}\n"
-                    f"Perfil afectado: {PROFILE_LABELS[profile]}"
+                    f"Perfiles afectados: {labels}"
                 ),
                 response_format={
                     "type": "text",
@@ -281,12 +292,11 @@ class GeminiEnvironmentService:
 
         return (
             RiskLevel.MEDIO,
-            f"Precaución cerca de {location}; reporte visible para usuarios de Map Inclusive.",
+            f"Precaución cerca de {location}; reporte visible para la comunidad de Map Inclusive.",
         )
 
     @staticmethod
     def _extract_citations(interaction: object) -> List[SourceCitation]:
-        """Extrae enlaces de citación de los pasos devueltos por Interactions API."""
         citations: List[SourceCitation] = []
         seen_urls: set[str] = set()
 
@@ -326,43 +336,40 @@ class GeminiEnvironmentService:
     def _build_offline_demo_response(
         self,
         req: EnvironmentCheckRequest,
+        disabilities: List[AccessibilityProfile],
         incidents: List[IncidentRecord],
         reason: str,
     ) -> EnvironmentCheckResponse:
-        """Respuesta preventiva para pruebas locales sin API key o sin internet."""
         now_iso = datetime.now(timezone.utc).isoformat()
-        profile_label = PROFILE_LABELS[req.profile]
+        labels = [PROFILE_LABELS[d] for d in disabilities]
+        combined_label = " + ".join(labels)
 
         incident_lines = [
             f"{inc.title} en {inc.location}" for inc in incidents
         ] or ["Rampa bloqueada reportada en esquina Av. Universidad (desvío activo)."]
 
-        profile_tips: Dict[AccessibilityProfile, List[str]] = {
-            AccessibilityProfile.SILLA_DE_RUEDAS: [
-                "Usa la banqueta norte de Av. Universidad: cuenta con rampa disponible en 80 m.",
-                "Evita el cruce secundario con obra reportada; ruta recalculada sin escalones.",
-            ],
-            AccessibilityProfile.VISUAL: [
-                "Cruce peatonal principal con semáforo sonoro activo hacia Clínica 19.",
-                "Atención a señalización temporal de mantenimiento a 120 m del destino.",
-            ],
-            AccessibilityProfile.AUDITIVO: [
-                "Cruces con señalización luminosa visible en todo el trayecto.",
-                "Revisa las alertas visuales en pantalla cada 10 minutos por posibles desvíos.",
-            ],
-            AccessibilityProfile.MOVILIDAD_REDUCIDA: [
-                "Trayecto seleccionado con pendiente mínima y bancas de descanso a mitad de ruta.",
-                "Acceso principal de Clínica 19 a nivel de calle sin escalones.",
-            ],
-            AccessibilityProfile.NEURODIVERGENTE: [
-                "Ruta tranquila por calles secundarias iluminadas con menor ruido vehicular.",
-                "Avisos simplificados paso a paso activos; evita zonas de alta concentración.",
-            ],
+        profile_tips: Dict[AccessibilityProfile, str] = {
+            AccessibilityProfile.SILLA_DE_RUEDAS: (
+                "Silla de ruedas: usa la banqueta norte de Av. Universidad con rampa disponible en 80 m."
+            ),
+            AccessibilityProfile.VISUAL: (
+                "Visual: cruce peatonal principal con semáforo sonoro y línea podotáctil continua."
+            ),
+            AccessibilityProfile.AUDITIVO: (
+                "Auditivo: cruces con señalización luminosa visible y avisos claros en pantalla."
+            ),
+            AccessibilityProfile.MOVILIDAD_REDUCIDA: (
+                "Movilidad reducida: trayecto de pendiente mínima con bancas de descanso a mitad de ruta."
+            ),
+            AccessibilityProfile.NEURODIVERGENTE: (
+                "Neurodivergente: ruta por calles arboladas tranquilas con menor ruido y avisos simples."
+            ),
         }
+        tips = [profile_tips[d] for d in disabilities]
 
         has_high = any(inc.severity == RiskLevel.ALTO for inc in incidents)
         banner = (
-            "Clima despejado · 1 alerta de rampa evitada en tu ruta"
+            f"Clima despejado · {len(incidents)} alerta(s) evitadas en ruta"
             if incidents
             else "Clima despejado, sin bloqueos viales (modo demo)"
         )
@@ -370,8 +377,10 @@ class GeminiEnvironmentService:
         return EnvironmentCheckResponse(
             origin=req.origin,
             destination=req.destination,
-            profile=req.profile,
-            profile_label=profile_label,
+            profile=disabilities[0],
+            profile_label=combined_label,
+            disabilities=disabilities,
+            disabilities_labels=labels,
             status_mode="offline_demo",
             from_cache=False,
             model_used=self.model,
@@ -386,7 +395,7 @@ class GeminiEnvironmentService:
                 "Zona poco concurrida detectada en callejón lateral a 250 m (evitada en tu ruta).",
                 reason,
             ],
-            recomendaciones_perfil=profile_tips[req.profile],
+            recomendaciones_perfil=tips,
             nivel_riesgo=RiskLevel.MEDIO if has_high else RiskLevel.BAJO,
             fuentes=[],
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AccessibilityProfile(str, Enum):
@@ -33,6 +33,22 @@ class RiskLevel(str, Enum):
     ALTO = "alto"
 
 
+def normalize_disabilities(
+    disabilities: Optional[List[AccessibilityProfile]],
+    fallback_profile: AccessibilityProfile = AccessibilityProfile.SILLA_DE_RUEDAS,
+) -> List[AccessibilityProfile]:
+    """Devuelve una lista no vacía y sin duplicados preservando el orden."""
+    if not disabilities:
+        return [fallback_profile]
+    seen: set[AccessibilityProfile] = set()
+    ordered: List[AccessibilityProfile] = []
+    for item in disabilities:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered or [fallback_profile]
+
+
 # ---------------------------------------------------------------------------
 # Entorno y Gemini API
 # ---------------------------------------------------------------------------
@@ -49,20 +65,25 @@ class EnvironmentCheckRequest(BaseModel):
     )
     profile: AccessibilityProfile = Field(
         default=AccessibilityProfile.SILLA_DE_RUEDAS,
-        description="Perfil de accesibilidad activo.",
+        description="Perfil principal (compatibilidad). Usa `disabilities` para múltiples.",
     )
-    latitude: Optional[float] = Field(
-        default=19.3498,
-        description="Latitud opcional del usuario.",
+    disabilities: Optional[List[AccessibilityProfile]] = Field(
+        default=None,
+        description="Lista de una o más discapacidades seleccionadas por el usuario.",
     )
-    longitude: Optional[float] = Field(
-        default=-99.1617,
-        description="Longitud opcional del usuario.",
-    )
+    latitude: Optional[float] = Field(default=19.3498)
+    longitude: Optional[float] = Field(default=-99.1617)
     force_refresh: bool = Field(
         default=False,
         description="Si es true, omite el caché de 10 minutos y consulta a Gemini al instante.",
     )
+
+    @model_validator(mode="after")
+    def _sync_disabilities(self) -> "EnvironmentCheckRequest":
+        normalized = normalize_disabilities(self.disabilities, self.profile)
+        self.disabilities = normalized
+        self.profile = normalized[0]
+        return self
 
 
 class GeminiEnvironmentPayload(BaseModel):
@@ -90,7 +111,7 @@ class GeminiEnvironmentPayload(BaseModel):
         description="Avisos sobre zonas poco concurridas o potencialmente riesgosas."
     )
     recomendaciones_perfil: List[str] = Field(
-        description="Recomendaciones prácticas adaptadas específicamente al perfil seleccionado."
+        description="Recomendaciones prácticas adaptadas a todas las discapacidades seleccionadas."
     )
     nivel_riesgo: RiskLevel = Field(
         description="Nivel general de riesgo o dificultad del trayecto: bajo, medio o alto."
@@ -109,13 +130,12 @@ class EnvironmentCheckResponse(BaseModel):
     destination: str
     profile: AccessibilityProfile
     profile_label: str
+    disabilities: List[AccessibilityProfile]
+    disabilities_labels: List[str]
     status_mode: str = Field(
         description="'gemini_live' si vino de Gemini API o 'offline_demo' si operó sin API key/red."
     )
-    from_cache: bool = Field(
-        default=False,
-        description="Indica si la respuesta fue servida desde el caché de 10 minutos.",
-    )
+    from_cache: bool = Field(default=False)
     model_used: str
     updated_at: str
     next_refresh_minutes: int = 10
@@ -131,7 +151,7 @@ class EnvironmentCheckResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Rutas independientes por discapacidad y tiempo estimado
+# Rutas independientes (soporta 1 o múltiples discapacidades)
 # ---------------------------------------------------------------------------
 class RouteEstimate(BaseModel):
     id: str
@@ -140,6 +160,8 @@ class RouteEstimate(BaseModel):
     category: str
     profile: AccessibilityProfile
     profile_label: str
+    disabilities: List[AccessibilityProfile]
+    disabilities_labels: List[str]
     route_name: str
     distance_km: float
     distance_text: str
@@ -170,13 +192,22 @@ class ClinicInfo(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Incidencias ciudadanas
+# Incidencias ciudadanas e historial
 # ---------------------------------------------------------------------------
 class IncidentCreateRequest(BaseModel):
     title: str = Field(..., min_length=3, description="Título corto, ej. 'Rampa bloqueada'")
     description: str = Field(default="", description="Descripción opcional del obstáculo.")
     location: str = Field(default="Av. Universidad, Coyoacán")
     profile: AccessibilityProfile = Field(default=AccessibilityProfile.SILLA_DE_RUEDAS)
+    disabilities: Optional[List[AccessibilityProfile]] = Field(default=None)
+    reported_by: Optional[str] = Field(default="Usuario anónimo")
+
+    @model_validator(mode="after")
+    def _sync_disabilities(self) -> "IncidentCreateRequest":
+        normalized = normalize_disabilities(self.disabilities, self.profile)
+        self.disabilities = normalized
+        self.profile = normalized[0]
+        return self
 
 
 class IncidentRecord(BaseModel):
@@ -185,14 +216,24 @@ class IncidentRecord(BaseModel):
     description: str
     location: str
     profile: AccessibilityProfile
+    disabilities: List[AccessibilityProfile] = Field(default_factory=list)
+    disabilities_labels: List[str] = Field(default_factory=list)
+    reported_by: str = "Comunidad Map Inclusive"
     severity: RiskLevel
     ai_advice: str
     created_at: str
 
 
 # ---------------------------------------------------------------------------
-# Perfil, Autenticación (usuario + correo + contraseña + discapacidad)
+# Perfil, Autenticación, Foto opcional, Múltiples discapacidades y Menor/Familiar
 # ---------------------------------------------------------------------------
+class GuardianContact(BaseModel):
+    name: str = Field(..., min_length=2, max_length=80)
+    relation: str = Field(default="Familiar / Tutor", max_length=40)
+    phone: str = Field(default="", max_length=30)
+    email: str = Field(default="", max_length=120)
+
+
 class UserRegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=40)
     email: str = Field(..., min_length=5, max_length=120)
@@ -200,6 +241,20 @@ class UserRegisterRequest(BaseModel):
     disability_profile: AccessibilityProfile = Field(
         default=AccessibilityProfile.SILLA_DE_RUEDAS
     )
+    disabilities: Optional[List[AccessibilityProfile]] = Field(default=None)
+    # Foto opcional para usuarios regulares
+    face_photo_base64: Optional[str] = Field(default=None)
+    face_photo_filename: Optional[str] = Field(default=None)
+    # Protección para menores de edad
+    is_minor: bool = Field(default=False)
+    guardian: Optional[GuardianContact] = Field(default=None)
+
+    @model_validator(mode="after")
+    def _sync_fields(self) -> "UserRegisterRequest":
+        normalized = normalize_disabilities(self.disabilities, self.disability_profile)
+        self.disabilities = normalized
+        self.disability_profile = normalized[0]
+        return self
 
 
 class UserLoginRequest(BaseModel):
@@ -209,7 +264,27 @@ class UserLoginRequest(BaseModel):
 
 class UpdateDisabilityRequest(BaseModel):
     user_id: str
-    disability_profile: AccessibilityProfile
+    disability_profile: AccessibilityProfile = Field(
+        default=AccessibilityProfile.SILLA_DE_RUEDAS
+    )
+    disabilities: Optional[List[AccessibilityProfile]] = Field(default=None)
+
+    @model_validator(mode="after")
+    def _sync_fields(self) -> "UpdateDisabilityRequest":
+        normalized = normalize_disabilities(self.disabilities, self.disability_profile)
+        self.disabilities = normalized
+        self.disability_profile = normalized[0]
+        return self
+
+
+class UpdateProfileRequest(BaseModel):
+    user_id: str
+    disabilities: Optional[List[AccessibilityProfile]] = None
+    face_photo_base64: Optional[str] = None
+    face_photo_filename: Optional[str] = None
+    clear_photo: bool = False
+    is_minor: Optional[bool] = None
+    guardian: Optional[GuardianContact] = None
 
 
 class UserProfileResponse(BaseModel):
@@ -218,15 +293,27 @@ class UserProfileResponse(BaseModel):
     email: str
     disability_profile: AccessibilityProfile
     disability_label: str
+    disabilities: List[AccessibilityProfile]
+    disabilities_labels: List[str]
+    face_photo_base64: Optional[str] = None
+    face_photo_filename: Optional[str] = None
+    is_minor: bool = False
+    guardian: Optional[GuardianContact] = None
     is_volunteer: bool
     created_at: str
 
 
 # ---------------------------------------------------------------------------
-# Voluntarios (lista inicialmente vacía + postulación desde Perfil)
+# Voluntarios (FOTO DE ROSTRO OBLIGATORIA + lista inicialmente vacía)
 # ---------------------------------------------------------------------------
 class VolunteerApplicationRequest(BaseModel):
     user_id: str
+    face_photo_base64: str = Field(
+        ...,
+        min_length=20,
+        description="Foto de rostro en base64 obligatoria para identificar al voluntario.",
+    )
+    face_photo_filename: str = Field(default="rostro_voluntario.jpg")
     zone: str = Field(default="Campus Coyoacán / Av. Universidad")
     availability: str = Field(default="Lun-Vie 09:00 - 18:00")
     support_notes: str = Field(
@@ -239,6 +326,8 @@ class VolunteerMember(BaseModel):
     user_id: str
     username: str
     email: str
+    face_photo_base64: str
+    face_photo_filename: str
     zone: str
     availability: str
     support_notes: str
@@ -249,6 +338,7 @@ class VolunteerRequest(BaseModel):
     user_location: str = Field(default="Av. Universidad 400, Coyoacán")
     destination: str = Field(default="Clínica 19")
     profile: AccessibilityProfile = Field(default=AccessibilityProfile.SILLA_DE_RUEDAS)
+    disabilities: Optional[List[AccessibilityProfile]] = Field(default=None)
     notes: str = Field(default="")
 
 
@@ -256,8 +346,58 @@ class VolunteerResponse(BaseModel):
     request_id: str
     status: str
     volunteer_name: Optional[str] = None
+    volunteer_photo_base64: Optional[str] = None
     eta_minutes: Optional[int] = None
     message: str
+
+
+# ---------------------------------------------------------------------------
+# Protección de menores: ubicación en tiempo real + alerta de extravío sonora
+# ---------------------------------------------------------------------------
+class GuardianLocationShareRequest(BaseModel):
+    user_id: Optional[str] = None
+    username: str = Field(default="Menor Map Inclusive")
+    guardian_name: str = Field(..., min_length=2)
+    guardian_contact: str = Field(..., min_length=3)
+    location_text: str = Field(default="Av. Universidad, Coyoacán, CDMX")
+    destination: str = Field(default="Clínica 19 (UMF IMSS)")
+    latitude: float = Field(default=19.3498)
+    longitude: float = Field(default=-99.1617)
+    status: str = Field(default="en_ruta")
+
+
+class GuardianLocationShareResponse(BaseModel):
+    share_id: str
+    status: str
+    guardian_name: str
+    guardian_contact: str
+    location_text: str
+    latitude: float
+    longitude: float
+    shared_at: str
+    message: str
+
+
+class LostMinorAlertRequest(BaseModel):
+    user_id: Optional[str] = None
+    username: str = Field(default="Usuario menor de edad")
+    guardian_name: str = Field(default="Familiar registrado")
+    guardian_phone: str = Field(default="")
+    guardian_email: str = Field(default="")
+    location_text: str = Field(default="Av. Universidad, Coyoacán, CDMX")
+    disabilities: List[AccessibilityProfile] = Field(
+        default_factory=lambda: [AccessibilityProfile.SILLA_DE_RUEDAS]
+    )
+
+
+class LostMinorAlertResponse(BaseModel):
+    alert_id: str
+    status: str
+    sound_alarm_triggered: bool
+    guardian_notified: str
+    location_text: str
+    timestamp: str
+    helper_message: str
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +406,7 @@ class VolunteerResponse(BaseModel):
 class EmergencyAlertRequest(BaseModel):
     location: str = Field(default="Av. Universidad, Coyoacán, CDMX")
     profile: AccessibilityProfile = Field(default=AccessibilityProfile.SILLA_DE_RUEDAS)
+    disabilities: Optional[List[AccessibilityProfile]] = None
     username: Optional[str] = None
     notes: str = Field(default="Solicitud de ayuda inmediata desde Map Inclusive")
 
