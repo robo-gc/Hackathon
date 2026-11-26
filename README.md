@@ -1,88 +1,85 @@
-# Map Inclusive — Prueba Corta (Python + Android + Gemini API)
+# Map Inclusive — Prueba Corta (100% Python + Android con Flet + Gemini API)
 
 **Equipo:** Apex soa (Márquez Fuentes Sebastian, Calderón Pérez Emiliano Javier, Nelson Alejandro Gonzalez Al Daoud)  
-**Campus:** Coyoacán
+**Campus:** Coyoacán  
+**Stack de esta prueba:** **100% Python** (FastAPI + Flet para Android con motor Flutter + Google Gemini API). **Sin nada de Java.**
 
 ![Boceto Secuencial UI/UX](docs/boceto_secuencial.jpg)
 
 ---
 
-## Arquitectura de la prueba corta
+## Arquitectura (100% Python · Cero Java)
 
 ```text
-[App Android (Kotlin + Jetpack Compose)]
+[App Móvil Android — mobile_app/ (100% Python con Flet / motor Flutter)]
      │  HTTP JSON (actualización automática cada 10 min)
      ▼
-[Backend Python (FastAPI)]
+[Backend Python — backend/ (FastAPI)]
      │  SDK oficial google-genai >= 3.5.0 (Interactions API)
      ▼
 [Google Gemini (gemini-4-hydrogen + Google Search Grounding + Structured Output)]
 ```
 
-### ¿Qué función de Gemini se integró?
+### Funcionalidad de Gemini API integrada
 
 1. **Monitor de Entorno Urbano cada 10 minutos (`POST /api/v1/environment-check`):**
    - Usa **`gemini-4-hydrogen`** mediante `client.interactions.create(...)` con **Google Search Grounding** (`{"type": "google_search"}`) y **Structured Output** (`response_format` JSON Schema).
-   - Recopila clima, bloqueos viales/peatonales, transporte fuera de servicio, incidencias de accesibilidad y zonas de riesgo, y genera un resumen corto listo para el banner verde de la Pantalla 3 (*"Actualizado con Gemini: ..."*) más recomendaciones específicas según el perfil elegido (`silla_de_ruedas`, `visual`, `auditivo`, `movilidad_reducida` y `neurodivergente`).
+   - Recopila clima, bloqueos viales/peatonales, transporte fuera de servicio, incidencias de accesibilidad y zonas de riesgo; adapta las recomendaciones a los 5 perfiles (`silla_de_ruedas`, `visual`, `auditivo`, `movilidad_reducida` y `neurodivergente`).
    - Incluye **caché de 10 minutos (600 s)** y **manejo sin conexión (`offline_demo`)** cuando no hay API key o internet.
 2. **Clasificación rápida de incidencias ciudadanas (`POST /api/v1/incidents`):**
-   - Al reportar un obstáculo desde la Pantalla 4 (*"Rampa bloqueada"*), Gemini evalúa la severidad (`bajo` | `medio` | `alto`), genera un consejo inmediato y actualiza el contexto de la siguiente consulta de ruta.
+   - Al reportar un obstáculo desde la Pantalla 4 (*"Rampa bloqueada"*), Gemini evalúa la severidad (`bajo` | `medio` | `alto`), genera un consejo inmediato y actualiza la siguiente consulta de ruta.
 
 ---
 
-## 1. Probar en Python (en 1 minuto)
+## 1. Levantar el backend Python + Gemini
 
-### Instalación
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate   # En Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-### Configurar tu API Key de Gemini (opcional para pruebas locales)
-```bash
+# Opcional: agrega tu GEMINI_API_KEY (si no la pones, funciona en modo offline_demo)
 cp .env.example .env
-# Edita backend/.env y coloca tu GEMINI_API_KEY de https://aistudio.google.com/apikey
-```
-> Si todavía no colocas `GEMINI_API_KEY`, el backend responde en modo `offline_demo` para que puedas probar todo el flujo Python + Android de inmediato.
 
-### Prueba rápida por terminal (sin levantar servidor)
-```bash
-# Consulta única
-python3 backend/quick_test.py --profile silla_de_ruedas --destination "Clínica 19, Av. Universidad, Coyoacán"
+# Prueba rápida por terminal (1 consulta)
+python3 quick_test.py --profile silla_de_ruedas
 
-# Probar perfil neurodivergente
-python3 backend/quick_test.py --profile neurodivergente
-
-# Probar actualización periódica (ej. cada 15 s para demo; por defecto 600 s = 10 min)
-python3 backend/quick_test.py --loop --interval 15
-```
-
-### Levantar el servidor FastAPI para Android
-```bash
-cd backend
+# Levantar servidor FastAPI en el puerto 8000
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-- Documentación interactiva Swagger: `http://localhost:8000/docs`
-- Verificación de salud: `http://localhost:8000/health`
-
-### Ejecutar pruebas automatizadas
-```bash
-pytest -v backend/tests/test_api.py
 ```
 
 ---
 
-## 2. Probar en Android (Android Studio)
+## 2. Ejecutar la app móvil en Android (100% Python con Flet, sin Java)
 
-1. Abre la carpeta [`android/`](android/) en **Android Studio**.
-2. Asegúrate de tener corriendo el servidor Python en el puerto `8000` (`uvicorn main:app --host 0.0.0.0 --port 8000`).
-3. Ejecuta la app en un **Emulador Android**:
-   - Por defecto apunta a `http://10.0.2.2:8000` (el `localhost` de tu PC desde el emulador).
-   - Si pruebas en un **teléfono físico** en la misma red Wi-Fi, cambia `BACKEND_BASE_URL` en `android/app/build.gradle.kts` a `http://<IP_LOCAL_DE_TU_PC>:8000`.
-4. Recorre las 4 pantallas del boceto:
-   1. **Pantalla Inicial:** elige uno de los 5 perfiles de accesibilidad y toca **Continuar**.
-   2. **Buscar Destino:** selecciona **Clínica 19 · 400m** o escribe un destino.
-   3. **Ruta y Gemini:** observa el banner verde actualizado con Gemini (se refresca automáticamente cada 10 minutos o al tocar el botón de recarga; toca el banner para desplegar clima, bloqueos, transporte y recomendaciones).
-   4. **En Camino:** prueba **Reportar Incidencia**, **Pedir Guía Voluntaria** y **Finalizar**.
+Instala las dependencias de la app móvil:
+```bash
+pip install -r mobile_app/requirements.txt
+```
+
+### Opción A — Probar directo en tu teléfono Android (más rápido para el hackathon)
+1. Instala la app gratuita **Flet** desde Google Play en tu teléfono Android.
+2. En tu PC (conectada al mismo Wi-Fi), ejecuta:
+   ```bash
+   # Sustituye <IP_DE_TU_PC> por tu IP local (ej. 192.168.1.50)
+   MAP_INCLUSIVE_API_URL=http://<IP_DE_TU_PC>:8000 flet run --android mobile_app/main.py
+   ```
+3. Escanea el código QR desde la app **Flet** en Android y recorre las 4 pantallas del boceto en vivo.
+
+### Opción B — Probar en ventana móvil o navegador en tu PC
+```bash
+# Vista móvil en escritorio
+flet run mobile_app/main.py
+
+# O en navegador web
+flet run --web --port 8550 mobile_app/main.py
+```
+
+---
+
+## 3. Ejecutar las pruebas automatizadas
+
+```bash
+pytest -v backend/tests/
+```

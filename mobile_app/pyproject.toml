@@ -1,0 +1,17 @@
+[project]
+name = "map-inclusive"
+version = "0.1.0"
+description = "Map Inclusive — App móvil accesible para Android hecha 100% en Python (Flet) + Google Gemini API"
+requires-python = ">=3.11"
+dependencies = [
+    "flet>=1.0.0",
+    "httpx>=0.27.0",
+]
+
+[tool.flet]
+org = "com.apexsoa"
+product = "Map Inclusive"
+company = "Equipo Apex soa - Campus Coyoacán"
+
+[tool.flet.app]
+path = "."

@@ -6,13 +6,9 @@ venv/
 .pytest_cache/
 .env
 
-# Android / Gradle
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
-*.iml
-.idea/
+# Flet / builds
+build/
+dist/
 *.apk
 *.aab
 
