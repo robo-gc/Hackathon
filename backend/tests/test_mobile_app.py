@@ -61,6 +61,37 @@ def test_themes_waze_sheet_voice_steps_and_all_screens() -> None:
     assert all(s["spoken_text"] != "" for s in steps_visual)
     assert all(s["spoken_text"] == "" for s in steps_auditivo)
 
+    # 3b) Mapas dinámicos: cada discapacidad y cada destino generan rutas, waypoints y calles distintos
+    all_profiles = ["silla_de_ruedas", "visual", "auditivo", "movilidad_reducida", "neurodivergente"]
+    blueprints = {
+        p: mobile_main.get_map_blueprint([p], "Clínica 19 (UMF IMSS)", light)
+        for p in all_profiles
+    }
+    assert len({tuple(bp["waypoints"]) for bp in blueprints.values()}) == 5
+    assert len({bp["route_color"] for bp in blueprints.values()}) == 5
+    assert len({bp["obstacle"][2] for bp in blueprints.values()}) == 5
+    assert blueprints["visual"]["dashed"] is True
+    assert blueprints["silla_de_ruedas"]["dashed"] is False
+
+    bp_clinica19 = mobile_main.get_map_blueprint(["silla_de_ruedas"], "Clínica 19 (UMF IMSS)", light)
+    bp_allende = mobile_main.get_map_blueprint(["silla_de_ruedas"], "Centro de Salud T-III Coyoacán", light)
+    bp_metro = mobile_main.get_map_blueprint(["silla_de_ruedas"], "Metro Coyoacán (Línea 3)", light)
+    assert bp_clinica19["street_label"] != bp_allende["street_label"] != bp_metro["street_label"]
+    assert bp_clinica19["waypoints"] != bp_allende["waypoints"]
+
+    # Verificar que build_minimalist_map renderiza sin error para todas las discapacidades y pasos
+    for p in all_profiles:
+        for step_idx in range(4):
+            w = mobile_main.build_minimalist_map(
+                dark,
+                show_route=True,
+                show_user_arrow=True,
+                arrow_step=step_idx,
+                disabilities=[p],
+                destination="Jardín Centenario Coyoacán",
+            )
+            assert w is not None
+
     # 4) Sirena WAV sintetizada en memoria
     wav_bytes = mobile_main.generate_alert_siren_wav()
     assert wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"

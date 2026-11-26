@@ -1066,107 +1066,428 @@ def build_face_avatar(
     )
 
 
+def get_map_blueprint(
+    disabilities: List[str],
+    destination: str,
+    t: ThemePalette,
+) -> Dict[str, Any]:
+    """Genera un diseño de mapa, calles, ruta, obstáculos y waypoints únicos por discapacidad y destino."""
+    active = normalize_disabilities(disabilities)
+    primary = active[0]
+    has_auditivo = "auditivo" in active
+    dest_low = (destination or "").lower()
+
+    # 1) Barrio / calles / parques distintos según el destino elegido
+    if "centro de salud" in dest_low or "allende" in dest_low:
+        street_label = "C. Ignacio Allende · Del Carmen"
+        dest_icon = ft.Icons.LOCAL_HOSPITAL
+        h_streets = [38, 102, 152]
+        v_streets = [64, 178, 286]
+        parks = [(18, 52, 58, 44), (210, 108, 72, 42)]
+        mirror_x = True
+    elif "metro" in dest_low:
+        street_label = "Av. Universidad y C. Mayorazgo"
+        dest_icon = ft.Icons.DIRECTIONS_SUBWAY
+        h_streets = [48, 126]
+        v_streets = [52, 154, 246, 310]
+        parks = [(164, 58, 74, 58)]
+        mirror_x = False
+    elif "centenario" in dest_low or "parque" in dest_low or "jardín" in dest_low:
+        street_label = "Centro Coyoacán · Jardín Centenario"
+        dest_icon = ft.Icons.PARK
+        h_streets = [34, 94, 146]
+        v_streets = [82, 232]
+        parks = [(98, 44, 126, 94), (248, 22, 68, 54)]
+        mirror_x = True
+    elif "xoco" in dest_low or "hospital" in dest_low:
+        street_label = "Av. México Coyoacán · Zona Hospitalaria"
+        dest_icon = ft.Icons.LOCAL_HOSPITAL
+        h_streets = [42, 114, 156]
+        v_streets = [70, 198, 294]
+        parks = [(82, 56, 62, 50), (218, 52, 64, 52)]
+        mirror_x = False
+    elif "clínica 19" in dest_low or "clinica 19" in dest_low:
+        street_label = "Av. Universidad · Campus Coyoacán"
+        dest_icon = ft.Icons.LOCAL_HOSPITAL
+        h_streets = [44, 124]
+        v_streets = [88, 238]
+        parks = [(118, 22, 78, 74)]
+        mirror_x = False
+    else:
+        # Destino personalizado: layout determinista distinto basado en el nombre
+        seed = sum(ord(ch) for ch in dest_low) % 3
+        street_label = f"Zona Coyoacán · {destination[:22]}"
+        dest_icon = ft.Icons.FLAG
+        if seed == 0:
+            h_streets, v_streets = [40, 118], [74, 196, 290]
+            parks = [(92, 54, 88, 54)]
+            mirror_x = False
+        elif seed == 1:
+            h_streets, v_streets = [36, 96, 148], [60, 224]
+            parks = [(76, 46, 120, 46)]
+            mirror_x = True
+        else:
+            h_streets, v_streets = [50, 132], [96, 256]
+            parks = [(124, 62, 108, 60)]
+            mirror_x = False
+
+    # 2) Geometría de ruta, color, estilo y puntos clave únicos por discapacidad
+    if primary == "silla_de_ruedas":
+        route_color = "#60A5FA" if t.is_dark else "#1B2354"
+        dashed = False
+        waypoints = [(56, 134), (56, 44), (242, 44), (288, 96)]
+        obstacle = (158, 128, "Rampa bloqueada", ft.Icons.WARNING_AMBER, t.alert_orange)
+        landmarks = [
+            (56, 86, "Rampa", ft.Icons.ACCESSIBLE, t.blue_action),
+            (182, 44, "Cruce plano", ft.Icons.ACCESSIBLE, t.blue_action),
+        ]
+        legend = "Desvío con rampas continuas"
+    elif primary == "visual":
+        route_color = "#FBBF24" if t.is_dark else "#D97706"
+        dashed = True  # línea podotáctil segmentada
+        waypoints = [(164, 144), (164, 88), (164, 38), (278, 38)]
+        obstacle = (84, 86, "Poste / Obra", ft.Icons.CONSTRUCTION, t.alert_orange)
+        landmarks = [
+            (
+                164,
+                38,
+                "Cruce táctil" if has_auditivo else "Semáforo sonoro",
+                ft.Icons.VISIBILITY if has_auditivo else ft.Icons.VOLUME_UP,
+                "#7C3AED",
+            ),
+            (164, 108, "Podotáctil", ft.Icons.VISIBILITY, "#D97706"),
+        ]
+        legend = "Guía podotáctil" + (" (táctil)" if has_auditivo else " y sonoro")
+    elif primary == "auditivo":
+        route_color = "#38BDF8" if t.is_dark else "#0284C7"
+        dashed = False
+        waypoints = [(286, 140), (192, 140), (192, 66), (76, 66)]
+        obstacle = (264, 52, "Cruce sin señal", ft.Icons.WARNING_AMBER, t.alert_orange)
+        landmarks = [
+            (192, 102, "Semáforo visual", ft.Icons.TRAFFIC, t.emerald),
+            (126, 66, "Alta visibilidad", ft.Icons.VISIBILITY, "#0284C7"),
+        ]
+        legend = "Corredor 100% visual"
+    elif primary == "movilidad_reducida":
+        route_color = "#34D399" if t.is_dark else "#0E9F6E"
+        dashed = False
+        waypoints = [(48, 104), (138, 104), (218, 104), (288, 66)]
+        obstacle = (158, 36, "Escaleras evitadas", ft.Icons.BLOCK, t.danger_red)
+        landmarks = [
+            (138, 104, "Banca / Sombra", ft.Icons.CHAIR, "#0E9F6E"),
+            (218, 104, "Sin escalones", ft.Icons.DIRECTIONS_WALK, "#0E9F6E"),
+        ]
+        legend = "Andador plano con descansos"
+    else:  # neurodivergente
+        route_color = "#A78BFA" if t.is_dark else "#7C3AED"
+        dashed = False
+        waypoints = [(54, 142), (118, 142), (272, 142), (272, 40)]
+        obstacle = (118, 44, "Obra ruidosa evitada", ft.Icons.CAMPAIGN, t.danger_red)
+        landmarks = [
+            (192, 142, "Calle tranquila", ft.Icons.PARK, t.emerald),
+            (272, 88, "Bajo ruido", ft.Icons.PSYCHOLOGY, "#7C3AED"),
+        ]
+        legend = "Ruta tranquila (baja estimulación)"
+
+    # Aplicar espejo horizontal para destinos alternos para que el mapa cambie también por destino
+    if mirror_x:
+        width_ref = 340
+        waypoints = [(max(26, width_ref - x), y) for x, y in waypoints]
+        ox, oy, otxt, oico, ocol = obstacle
+        obstacle = (max(26, width_ref - ox), oy, otxt, oico, ocol)
+        landmarks = [(max(26, width_ref - lx), ly, ltxt, lico, lcol) for lx, ly, ltxt, lico, lcol in landmarks]
+
+    # Añadir un marcador extra si hay múltiples discapacidades combinadas
+    if len(active) > 1:
+        extra_prof = get_profile(active[1])
+        mx, my = waypoints[1]
+        landmarks.append((mx, max(24, my - 26), extra_prof.short_label, extra_prof.icon, t.blue_action))
+        legend = f"{legend} + {extra_prof.short_label}"
+
+    return {
+        "street_label": street_label,
+        "dest_icon": dest_icon,
+        "h_streets": h_streets,
+        "v_streets": v_streets,
+        "parks": parks,
+        "route_color": route_color,
+        "dashed": dashed,
+        "waypoints": waypoints,
+        "obstacle": obstacle,
+        "landmarks": landmarks,
+        "legend": legend,
+    }
+
+
+def _draw_ortho_route_segments(
+    points: List[tuple[int, int]],
+    active_step: int,
+    base_color: str,
+    done_color: str,
+    dashed: bool,
+    show_progress: bool,
+) -> List[ft.Control]:
+    """Dibuja segmentos limpios (sólidos o punteados) entre los waypoints de la ruta."""
+    controls: List[ft.Control] = []
+    thickness = 7
+
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        seg_color = done_color if (show_progress and i < active_step) else base_color
+
+        # Si el segmento cambia en X y en Y, dibuja una esquina ortogonal (horizontal luego vertical)
+        sub_segs = [(x1, y1, x2, y1), (x2, y1, x2, y2)] if (x1 != x2 and y1 != y2) else [(x1, y1, x2, y2)]
+
+        for sx1, sy1, sx2, sy2 in sub_segs:
+            if sx1 == sx2 and sy1 == sy2:
+                continue
+            if sy1 == sy2:
+                left = min(sx1, sx2)
+                total_w = abs(sx2 - sx1) + thickness
+                if dashed:
+                    cursor = left
+                    while cursor < left + total_w - 4:
+                        dash_w = min(12, left + total_w - cursor)
+                        controls.append(
+                            ft.Container(
+                                left=cursor,
+                                top=sy1 - thickness // 2,
+                                width=dash_w,
+                                height=thickness,
+                                border_radius=3,
+                                bgcolor=seg_color,
+                            )
+                        )
+                        cursor += 18
+                else:
+                    controls.append(
+                        ft.Container(
+                            left=left,
+                            top=sy1 - thickness // 2,
+                            width=total_w,
+                            height=thickness,
+                            border_radius=4,
+                            bgcolor=seg_color,
+                        )
+                    )
+            else:
+                top = min(sy1, sy2)
+                total_h = abs(sy2 - sy1) + thickness
+                if dashed:
+                    cursor = top
+                    while cursor < top + total_h - 4:
+                        dash_h = min(12, top + total_h - cursor)
+                        controls.append(
+                            ft.Container(
+                                left=sx1 - thickness // 2,
+                                top=cursor,
+                                width=thickness,
+                                height=dash_h,
+                                border_radius=3,
+                                bgcolor=seg_color,
+                            )
+                        )
+                        cursor += 18
+                else:
+                    controls.append(
+                        ft.Container(
+                            left=sx1 - thickness // 2,
+                            top=top,
+                            width=thickness,
+                            height=total_h,
+                            border_radius=4,
+                            bgcolor=seg_color,
+                        )
+                    )
+
+        # Nodo circular en cada punto de paso
+        controls.append(
+            ft.Container(
+                left=x1 - 5,
+                top=y1 - 5,
+                width=10,
+                height=10,
+                border_radius=5,
+                bgcolor=seg_color,
+            )
+        )
+
+    return controls
+
+
 def build_minimalist_map(
     t: ThemePalette,
     *,
     show_route: bool,
-    badge_text: str,
+    badge_text: str = "",
     show_clinics: bool = False,
     show_user_arrow: bool = False,
     arrow_step: int = 0,
-    height: int = 175,
+    disabilities: Optional[List[str]] = None,
+    destination: str = "Clínica 19 (UMF IMSS)",
+    height: int = 185,
 ) -> ft.Container:
-    """Mapa vectorial minimalista adaptado a Modo Día / Modo Noche con posición animada por paso."""
-    layers: List[ft.Control] = [
-        ft.Container(left=0, right=0, top=46, height=12, bgcolor=t.map_street),
-        ft.Container(left=0, right=0, top=122, height=12, bgcolor=t.map_street),
-        ft.Container(top=0, bottom=0, left=92, width=12, bgcolor=t.map_street),
-        ft.Container(top=0, bottom=0, right=82, width=12, bgcolor=t.map_street),
-        ft.Container(left=126, top=20, width=74, height=74, border_radius=37, bgcolor=t.map_park),
-    ]
+    """Mapa vectorial dinámico: cambia calles, ruta, obstáculos, íconos y waypoints por discapacidad y destino."""
+    bp = get_map_blueprint(disabilities or ["silla_de_ruedas"], destination, t)
+    layers: List[ft.Control] = []
 
-    if show_clinics:
-        for pos in ((54, 66), (150, 32), (235, 108)):
-            layers.append(
-                ft.Container(
-                    left=pos[0],
-                    top=pos[1],
-                    width=32,
-                    height=32,
-                    border_radius=16,
-                    bgcolor=t.emerald,
-                    alignment=ft.Alignment.CENTER,
-                    content=ft.Icon(ft.Icons.LOCAL_HOSPITAL, color=ft.Colors.WHITE, size=17),
-                )
-            )
+    # 1) Calles del barrio
+    for hy in bp["h_streets"]:
+        layers.append(ft.Container(left=0, right=0, top=hy, height=11, bgcolor=t.map_street))
+    for vx in bp["v_streets"]:
+        layers.append(ft.Container(top=0, bottom=0, left=vx, width=11, bgcolor=t.map_street))
 
-    if show_route:
-        layers.extend(
-            [
-                ft.Container(left=98, top=46, width=148, height=8, border_radius=4, bgcolor=t.map_route),
-                ft.Container(left=238, top=46, width=8, height=84, border_radius=4, bgcolor=t.map_route),
-                ft.Container(left=132, top=122, width=114, height=8, border_radius=4, bgcolor=t.map_route),
-                # Bandera / meta en el destino
-                ft.Container(
-                    left=86,
-                    top=35,
-                    width=28,
-                    height=28,
-                    border_radius=14,
-                    bgcolor=t.emerald,
-                    alignment=ft.Alignment.CENTER,
-                    content=ft.Icon(ft.Icons.FLAG, color=ft.Colors.WHITE, size=15),
-                ),
-            ]
-        )
-
-    if show_user_arrow:
-        # 4 posiciones reales a lo largo de la ruta conforme avanza la simulación
-        waypoints = [
-            (130, 108),  # Paso 1: inicio
-            (222, 108),  # Paso 2: esquina derecha
-            (222, 34),   # Paso 3: cruce superior
-            (92, 34),    # Paso 4: llegada al destino
-        ]
-        px, py = waypoints[min(max(arrow_step, 0), len(waypoints) - 1)]
+    # 2) Parques / áreas verdes del barrio
+    for px, py, pw, ph in bp["parks"]:
         layers.append(
             ft.Container(
                 left=px,
                 top=py,
-                width=40,
-                height=40,
-                border_radius=20,
+                width=pw,
+                height=ph,
+                border_radius=min(pw, ph) // 2,
+                bgcolor=t.map_park,
+            )
+        )
+
+    # 3) Pines de clínicas en pantalla Explorar
+    if show_clinics:
+        for pos in ((44, 62), (168, 28), (272, 102)):
+            layers.append(
+                ft.Container(
+                    left=pos[0],
+                    top=pos[1],
+                    width=30,
+                    height=30,
+                    border_radius=15,
+                    bgcolor=t.emerald,
+                    alignment=ft.Alignment.CENTER,
+                    content=ft.Icon(ft.Icons.LOCAL_HOSPITAL, color=ft.Colors.WHITE, size=16),
+                )
+            )
+
+    # 4) Ruta específica de la discapacidad + marcadores + obstáculo evitado
+    waypoints: List[tuple[int, int]] = bp["waypoints"]
+    if show_route:
+        layers.extend(
+            _draw_ortho_route_segments(
+                points=waypoints,
+                active_step=arrow_step,
+                base_color=bp["route_color"],
+                done_color=t.emerald,
+                dashed=bp["dashed"],
+                show_progress=show_user_arrow,
+            )
+        )
+
+        # Marcadores de accesibilidad específicos (rampas, semáforo sonoro/visual, banca, zona tranquila)
+        for lx, ly, _ltxt, lico, lcol in bp["landmarks"]:
+            layers.append(
+                ft.Container(
+                    left=lx - 11,
+                    top=ly - 11,
+                    width=22,
+                    height=22,
+                    border_radius=11,
+                    bgcolor=lcol,
+                    border=ft.Border.all(1.5, ft.Colors.WHITE),
+                    alignment=ft.Alignment.CENTER,
+                    content=ft.Icon(lico, color=ft.Colors.WHITE, size=12),
+                )
+            )
+
+        # Obstáculo evitado en el mapa (ej. Rampa bloqueada, Obra ruidosa, Escaleras)
+        ox, oy, otxt, oico, ocol = bp["obstacle"]
+        layers.append(
+            ft.Container(
+                left=ox - 12,
+                top=oy - 12,
+                width=24,
+                height=24,
+                border_radius=12,
+                bgcolor=ocol,
+                border=ft.Border.all(1.5, ft.Colors.WHITE),
+                alignment=ft.Alignment.CENTER,
+                content=ft.Icon(oico, color=ft.Colors.WHITE, size=13),
+            )
+        )
+
+        # Pin de meta en el destino final
+        gx, gy = waypoints[-1]
+        layers.append(
+            ft.Container(
+                left=gx - 14,
+                top=gy - 14,
+                width=28,
+                height=28,
+                border_radius=14,
+                bgcolor=t.emerald,
+                border=ft.Border.all(2, ft.Colors.WHITE),
+                alignment=ft.Alignment.CENTER,
+                content=ft.Icon(bp["dest_icon"], color=ft.Colors.WHITE, size=15),
+            )
+        )
+
+        if not badge_text:
+            badge_text = otxt
+
+    # 5) Flecha del usuario avanzando exactamente sobre los waypoints de esta discapacidad
+    if show_user_arrow:
+        ux, uy = waypoints[min(max(arrow_step, 0), len(waypoints) - 1)]
+        layers.append(
+            ft.Container(
+                left=ux - 18,
+                top=uy - 18,
+                width=36,
+                height=36,
+                border_radius=18,
                 bgcolor="#60A5FA" if t.is_dark else "#BFDBFE",
                 alignment=ft.Alignment.CENTER,
                 content=ft.Container(
-                    width=26,
-                    height=26,
-                    border_radius=13,
+                    width=24,
+                    height=24,
+                    border_radius=12,
                     bgcolor=t.blue_action,
                     alignment=ft.Alignment.CENTER,
-                    content=ft.Icon(ft.Icons.NAVIGATION, color=ft.Colors.WHITE, size=15),
+                    content=ft.Icon(ft.Icons.NAVIGATION, color=ft.Colors.WHITE, size=14),
                 ),
             )
         )
 
+    # 6) Etiqueta de aviso naranja en esquina superior derecha
     if badge_text:
         layers.append(
             ft.Container(
-                right=10,
-                top=10,
+                right=8,
+                top=8,
                 bgcolor=t.alert_orange,
-                border_radius=16,
-                padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                border_radius=14,
+                padding=ft.Padding.symmetric(horizontal=9, vertical=4),
                 content=ft.Row(
                     tight=True,
-                    spacing=5,
+                    spacing=4,
                     controls=[
-                        ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.WHITE, size=14),
-                        ft.Text(badge_text, color=ft.Colors.WHITE, size=11, weight=ft.FontWeight.W_600),
+                        ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.WHITE, size=13),
+                        ft.Text(badge_text, color=ft.Colors.WHITE, size=10, weight=ft.FontWeight.W_600),
                     ],
                 ),
             )
         )
+
+    # 7) Leyenda discreta inferior con nombre de calle + tipo de ruta activa
+    legend_text = f"{bp['street_label']} · {bp['legend']}" if show_route else bp["street_label"]
+    layers.append(
+        ft.Container(
+            left=8,
+            bottom=6,
+            bgcolor=t.card_bg,
+            border=ft.Border.all(1, t.border),
+            border_radius=10,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+            content=ft.Text(legend_text, size=10, weight=ft.FontWeight.W_600, color=t.text_primary),
+        )
+    )
 
     return ft.Container(
         height=height,
@@ -2362,7 +2683,9 @@ def main(page: ft.Page) -> None:
                         show_route=False,
                         badge_text="Zona poco concurrida",
                         show_clinics=True,
-                        height=165,
+                        disabilities=state.disabilities,
+                        destination=state.destination,
+                        height=175,
                     ),
                     ft.Text("Rutas sugeridas (lista con tiempo estimado)", size=14, weight=ft.FontWeight.BOLD, color=pal.text_heading),
                     ft.Container(
@@ -2588,7 +2911,13 @@ def main(page: ft.Page) -> None:
                     ),
                     ft.Text("Activa una o varias discapacidades:", size=12, color=pal.text_muted),
                     build_multi_disability_chips(),
-                    build_minimalist_map(pal, show_route=True, badge_text="Rampa bloqueada", height=150),
+                    build_minimalist_map(
+                        pal,
+                        show_route=True,
+                        disabilities=state.disabilities,
+                        destination=state.destination,
+                        height=180,
+                    ),
                     ft.Container(
                         bgcolor=pal.card_bg,
                         border_radius=20,
@@ -2807,10 +3136,11 @@ def main(page: ft.Page) -> None:
             build_minimalist_map(
                 pal,
                 show_route=True,
-                badge_text="",
                 show_user_arrow=True,
                 arrow_step=idx,
-                height=165,
+                disabilities=state.disabilities,
+                destination=state.destination,
+                height=185,
             )
         )
 
