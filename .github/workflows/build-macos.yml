@@ -1,0 +1,39 @@
+name: Compilar Map Inclusive macOS (.app)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Compilar app nativa para macOS
+    runs-on: macos-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar Flet y Geolocator
+        run: pip install "flet[all]==1.1.3" "flet-geolocator==1.1.3" "httpx>=0.27.0"
+
+      - name: Compilar aplicación nativa para macOS
+        working-directory: mobile_app
+        run: flet build macos --yes --no-rich-output
+
+      - name: Empaquetar .app en ZIP
+        working-directory: mobile_app/build/macos
+        run: |
+          ls -la
+          zip -r -y Map-Inclusive-macOS.zip *.app
+
+      - name: Subir Map-Inclusive-macOS para descarga
+        uses: actions/upload-artifact@v4
+        with:
+          name: Map-Inclusive-macOS
+          path: mobile_app/build/macos/Map-Inclusive-macOS.zip
+          retention-days: 30

@@ -814,9 +814,11 @@ def generate_alert_siren_wav() -> bytes:
 
 
 _SIREN_WAV_BYTES = generate_alert_siren_wav()
+_ACTIVE_SIREN_PROCESS: Optional[subprocess.Popen[Any]] = None
 
 
 def play_alert_sound_once() -> None:
+    global _ACTIVE_SIREN_PROCESS
     if sys.platform == "win32":
         try:
             import winsound  # type: ignore[import-not-found]
@@ -840,11 +842,18 @@ def play_alert_sound_once() -> None:
             tmp_path = tmp.name
         for player in ("afplay", "paplay", "aplay"):
             if shutil.which(player):
-                subprocess.run([player, tmp_path], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                proc = subprocess.Popen(
+                    [player, tmp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                _ACTIVE_SIREN_PROCESS = proc
+                proc.wait(timeout=5)
                 return
     except Exception:
         pass
     finally:
+        _ACTIVE_SIREN_PROCESS = None
         if tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -858,6 +867,14 @@ def play_alert_sound_once() -> None:
 
 
 def stop_alert_sound_immediately() -> None:
+    global _ACTIVE_SIREN_PROCESS
+    proc = _ACTIVE_SIREN_PROCESS
+    _ACTIVE_SIREN_PROCESS = None
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
     if sys.platform == "win32":
         try:
             import winsound  # type: ignore[import-not-found]
@@ -2986,7 +3003,7 @@ def main(page: ft.Page) -> None:
                     ),
                     styled_outlined_button(
                         pal,
-                        text="Activar sonido y permiso GPS (iOS / Android)",
+                        text="Activar sonido y permiso GPS (iOS / Android / macOS)",
                         icon=ft.Icons.VOLUME_UP,
                         icon_color=pal.emerald,
                         width=float("inf"),

@@ -28,3 +28,15 @@ NSLocationWhenInUseUsageDescription = "Map Inclusive necesita tu ubicación actu
 NSLocationAlwaysAndWhenInUseUsageDescription = "Map Inclusive usa tu ubicación para rutas accesibles y alertas de seguridad."
 NSPhotoLibraryUsageDescription = "Map Inclusive necesita acceso a tu fototeca para subir tu foto de perfil o verificación de voluntario."
 NSCameraUsageDescription = "Map Inclusive necesita acceso a la cámara para tomar tu foto de rostro."
+
+[tool.flet.macos.info]
+NSLocationWhenInUseUsageDescription = "Map Inclusive necesita tu ubicación actual para mostrarte rutas accesibles, clínicas y alertas cercanas."
+NSLocationUsageDescription = "Map Inclusive usa tu ubicación para rutas accesibles, clínicas cercanas y alertas de seguridad."
+NSPhotoLibraryUsageDescription = "Map Inclusive necesita acceso a tus fotos para subir tu imagen de perfil o verificación de voluntario."
+NSCameraUsageDescription = "Map Inclusive necesita acceso a la cámara para tomar tu foto de rostro."
+
+[tool.flet.macos.entitlement]
+"com.apple.security.network.client" = true
+"com.apple.security.personal-information.location" = true
+"com.apple.security.files.user-selected.read-only" = true
+"com.apple.security.assets.pictures.read-only" = true
