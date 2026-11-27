@@ -26,3 +26,5 @@ path = "."
 [tool.flet.ios.info]
 NSLocationWhenInUseUsageDescription = "Map Inclusive necesita tu ubicación actual para mostrarte rutas accesibles, clínicas y alertas cercanas."
 NSLocationAlwaysAndWhenInUseUsageDescription = "Map Inclusive usa tu ubicación para rutas accesibles y alertas de seguridad."
+NSPhotoLibraryUsageDescription = "Map Inclusive necesita acceso a tu fototeca para subir tu foto de perfil o verificación de voluntario."
+NSCameraUsageDescription = "Map Inclusive necesita acceso a la cámara para tomar tu foto de rostro."

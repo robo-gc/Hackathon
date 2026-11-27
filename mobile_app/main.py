@@ -1601,6 +1601,11 @@ def main(page: ft.Page) -> None:
 
     state = AppState()
     file_picker = ft.FilePicker()
+    if hasattr(page, "services"):
+        try:
+            page.services.append(file_picker)
+        except Exception:
+            pass
 
     # Registrar tipografía oficial de XMind (NeverMind) y servicio GPS nativo
     try:
@@ -1628,6 +1633,7 @@ def main(page: ft.Page) -> None:
             geolocator = None
 
     pending_locate_feedback = {"show": False}
+    pending_photo_callback: Dict[str, Any] = {"cb": None}
     web_bridge_state: Dict[str, Any] = {"channel": None, "proxy": None}
 
     def is_local_backend_unreachable_on_web() -> bool:
@@ -1715,6 +1721,20 @@ def main(page: ft.Page) -> None:
                 elif mtype == "gps_error":
                     code = str(msg.get("code", "unknown"))
                     page.run_task(handle_browser_gps_error_async, code)
+                elif mtype == "photo_result":
+                    b64 = str(msg.get("b64") or "")
+                    fname = str(msg.get("name") or "rostro.jpg")
+                    cb = pending_photo_callback.get("cb")
+                    pending_photo_callback["cb"] = None
+                    if b64 and cb is not None:
+                        try:
+                            cb(b64, fname)
+                        except Exception:
+                            pass
+                elif mtype == "photo_error":
+                    pending_photo_callback["cb"] = None
+                    err_txt = str(msg.get("message") or "No se pudo leer la imagen seleccionada.")
+                    show_info_dialog("Foto no leída", err_txt)
 
             proxy = create_proxy(_on_web_bridge_message)
             ch.onmessage = proxy
@@ -1929,12 +1949,16 @@ def main(page: ft.Page) -> None:
         page.show_dialog(dialog)
 
     # -----------------------------------------------------------------------
-    # Selector de foto de rostro
+    # Selector de foto de rostro (nativo HTML en Web/iOS + FilePicker en APK/PC)
     # -----------------------------------------------------------------------
     async def pick_face_photo(
         dialog_title: str,
         on_picked: Callable[[str, str], None],
     ) -> None:
+        if sys.platform == "emscripten":
+            pending_photo_callback["cb"] = on_picked
+            if send_web_bridge_cmd("pick_photo", title=dialog_title):
+                return
         try:
             files = await file_picker.pick_files(
                 dialog_title=dialog_title,
@@ -2591,27 +2615,30 @@ def main(page: ft.Page) -> None:
             state.disabilities,
         )
 
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                s_resp = await client.get(f"{state.api_url}/api/v1/routes/suggestions", params={"profiles": profiles_csv})
-                if s_resp.status_code == 200:
-                    state.suggestions = s_resp.json()
+        if not is_local_backend_unreachable_on_web():
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    s_resp = await client.get(f"{state.api_url}/api/v1/routes/suggestions", params={"profiles": profiles_csv})
+                    if s_resp.status_code == 200:
+                        state.suggestions = s_resp.json()
 
-                c_resp = await client.get(f"{state.api_url}/api/v1/clinics", params={"profiles": profiles_csv})
-                if c_resp.status_code == 200:
-                    state.clinics = c_resp.json()
+                    c_resp = await client.get(f"{state.api_url}/api/v1/clinics", params={"profiles": profiles_csv})
+                    if c_resp.status_code == 200:
+                        state.clinics = c_resp.json()
 
-                e_resp = await client.get(
-                    f"{state.api_url}/api/v1/routes/estimate",
-                    params={"destination": state.destination, "profiles": profiles_csv},
-                )
-                if e_resp.status_code == 200:
-                    state.current_route = e_resp.json()
-        except Exception:
-            pass
+                    e_resp = await client.get(
+                        f"{state.api_url}/api/v1/routes/estimate",
+                        params={"destination": state.destination, "profiles": profiles_csv},
+                    )
+                    if e_resp.status_code == 200:
+                        state.current_route = e_resp.json()
+            except Exception:
+                pass
         render()
 
     async def load_incidents_history() -> None:
+        if is_local_backend_unreachable_on_web():
+            return
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(f"{state.api_url}/api/v1/incidents")
@@ -2623,6 +2650,8 @@ def main(page: ft.Page) -> None:
             pass
 
     async def load_volunteers() -> None:
+        if is_local_backend_unreachable_on_web():
+            return
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(f"{state.api_url}/api/v1/volunteers")
@@ -4075,6 +4104,8 @@ def main(page: ft.Page) -> None:
                     state.vol_photo_name = filename
 
                 async def sync_photo() -> None:
+                    if is_local_backend_unreachable_on_web():
+                        return
                     try:
                         async with httpx.AsyncClient(timeout=10.0) as client:
                             await client.put(
@@ -4113,15 +4144,19 @@ def main(page: ft.Page) -> None:
                     "availability": state.vol_availability.strip() or "Horario flexible",
                     "support_notes": state.vol_notes.strip() or "Apoyo peatonal accesible",
                 }
-                try:
-                    async with httpx.AsyncClient(timeout=12.0) as client:
-                        resp = await client.post(f"{state.api_url}/api/v1/volunteers/apply", json=payload)
-                        if resp.status_code >= 400:
-                            state.vol_error = resp.json().get("detail", "No se pudo completar la postulación.")
-                            render()
-                            return
-                        member = resp.json()
-                except Exception:
+                member: Optional[Dict[str, Any]] = None
+                if not is_local_backend_unreachable_on_web():
+                    try:
+                        async with httpx.AsyncClient(timeout=12.0) as client:
+                            resp = await client.post(f"{state.api_url}/api/v1/volunteers/apply", json=payload)
+                            if resp.status_code >= 400:
+                                state.vol_error = resp.json().get("detail", "No se pudo completar la postulación.")
+                                render()
+                                return
+                            member = resp.json()
+                    except Exception:
+                        member = None
+                if member is None:
                     member = {
                         "id": f"vol-{uuid.uuid4().hex[:6]}",
                         "user_id": user["id"],
@@ -4475,12 +4510,71 @@ def main(page: ft.Page) -> None:
             state.reg_photo_name = filename
             render()
 
+        username_tf = styled_text_field(
+            pal,
+            label="Nombre de usuario" if is_register else "Usuario o correo electrónico",
+            value=state.reg_username,
+            prefix_icon=ft.Icons.PERSON,
+            on_change=lambda e: setattr(state, "reg_username", e.control.value or ""),
+        )
+        email_tf = styled_text_field(
+            pal,
+            label="Correo electrónico vinculado",
+            value=state.reg_email,
+            prefix_icon=ft.Icons.EMAIL,
+            on_change=lambda e: setattr(state, "reg_email", e.control.value or ""),
+        )
+        password_tf = styled_text_field(
+            pal,
+            label="Contraseña (mín. 6 caracteres)",
+            value=state.reg_password,
+            prefix_icon=ft.Icons.LOCK,
+            password=True,
+            can_reveal_password=True,
+            on_change=lambda e: setattr(state, "reg_password", e.control.value or ""),
+        )
+        guardian_name_tf = styled_text_field(
+            pal,
+            label="Nombre del familiar *",
+            value=state.reg_guardian_name,
+            on_change=lambda e: setattr(state, "reg_guardian_name", e.control.value or ""),
+        )
+        guardian_rel_tf = styled_text_field(
+            pal,
+            label="Parentesco",
+            value=state.reg_guardian_relation,
+            on_change=lambda e: setattr(state, "reg_guardian_relation", e.control.value or ""),
+        )
+        guardian_phone_tf = styled_text_field(
+            pal,
+            label="Teléfono del familiar *",
+            value=state.reg_guardian_phone,
+            on_change=lambda e: setattr(state, "reg_guardian_phone", e.control.value or ""),
+        )
+        guardian_email_tf = styled_text_field(
+            pal,
+            label="Correo del familiar (opcional)",
+            value=state.reg_guardian_email,
+            on_change=lambda e: setattr(state, "reg_guardian_email", e.control.value or ""),
+        )
+
         async def submit_auth() -> None:
             state.auth_error = None
             state.auth_feedback = None
-            u_val = state.reg_username.strip()
-            e_val = state.reg_email.strip().lower()
-            p_val = state.reg_password
+            # Sincroniza los valores directo de los TextField (evita fallos de autocorrect/autofill en iOS)
+            state.reg_username = username_tf.value if username_tf.value is not None else state.reg_username
+            if is_register:
+                state.reg_email = email_tf.value if email_tf.value is not None else state.reg_email
+            state.reg_password = password_tf.value if password_tf.value is not None else state.reg_password
+            if state.reg_is_minor:
+                state.reg_guardian_name = guardian_name_tf.value if guardian_name_tf.value is not None else state.reg_guardian_name
+                state.reg_guardian_relation = guardian_rel_tf.value if guardian_rel_tf.value is not None else state.reg_guardian_relation
+                state.reg_guardian_phone = guardian_phone_tf.value if guardian_phone_tf.value is not None else state.reg_guardian_phone
+                state.reg_guardian_email = guardian_email_tf.value if guardian_email_tf.value is not None else state.reg_guardian_email
+
+            u_val = (state.reg_username or "").strip()
+            e_val = (state.reg_email or "").strip().lower()
+            p_val = state.reg_password or ""
 
             if is_register:
                 if len(u_val) < 3:
@@ -4524,15 +4618,20 @@ def main(page: ft.Page) -> None:
                     "is_minor": state.reg_is_minor,
                     "guardian": guardian_payload,
                 }
-                try:
-                    async with httpx.AsyncClient(timeout=12.0) as client:
-                        resp = await client.post(f"{state.api_url}/api/v1/auth/register", json=req_body)
-                        if resp.status_code >= 400:
-                            state.auth_error = resp.json().get("detail", "Error al crear perfil.")
-                            render()
-                            return
-                        user_obj = resp.json()
-                except Exception:
+                user_obj: Optional[Dict[str, Any]] = None
+                if not is_local_backend_unreachable_on_web():
+                    try:
+                        async with httpx.AsyncClient(timeout=12.0) as client:
+                            resp = await client.post(f"{state.api_url}/api/v1/auth/register", json=req_body)
+                            if resp.status_code >= 400:
+                                state.auth_error = resp.json().get("detail", "Error al crear perfil.")
+                                render()
+                                return
+                            user_obj = resp.json()
+                    except Exception:
+                        user_obj = None
+
+                if user_obj is None:
                     user_obj = {
                         "id": f"usr-{uuid.uuid4().hex[:8]}",
                         "username": u_val,
@@ -4555,27 +4654,32 @@ def main(page: ft.Page) -> None:
                 state.vol_photo_b64 = user_obj.get("face_photo_base64")
                 state.vol_photo_name = user_obj.get("face_photo_filename")
                 state.auth_feedback = "Perfil creado y correo vinculado correctamente."
+                render()
                 await sync_routes_and_clinics()
             else:
                 if not u_val or not p_val:
                     state.auth_error = "Ingresa tu usuario/correo y contraseña."
                     render()
                     return
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        resp = await client.post(
-                            f"{state.api_url}/api/v1/auth/login",
-                            json={"identifier": u_val, "password": p_val},
-                        )
-                        if resp.status_code >= 400:
-                            state.auth_error = resp.json().get("detail", "Credenciales inválidas.")
-                            render()
-                            return
-                        user_obj = resp.json()
-                except Exception:
+                user_obj = None
+                if not is_local_backend_unreachable_on_web():
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            resp = await client.post(
+                                f"{state.api_url}/api/v1/auth/login",
+                                json={"identifier": u_val, "password": p_val},
+                            )
+                            if resp.status_code >= 400:
+                                state.auth_error = resp.json().get("detail", "Credenciales inválidas.")
+                                render()
+                                return
+                            user_obj = resp.json()
+                    except Exception:
+                        user_obj = None
+                if user_obj is None:
                     local = state.local_users.get(u_val.lower())
                     if not local or local.get("password_local") != p_val:
-                        state.auth_error = "Usuario/correo o contraseña incorrectos (modo local)."
+                        state.auth_error = "Usuario/correo o contraseña incorrectos (crea primero tu perfil)."
                         render()
                         return
                     user_obj = local
@@ -4585,6 +4689,7 @@ def main(page: ft.Page) -> None:
                 state.vol_photo_b64 = user_obj.get("face_photo_base64")
                 state.vol_photo_name = user_obj.get("face_photo_filename")
                 state.auth_feedback = f"¡Bienvenido de nuevo, {user_obj['username']}!"
+                render()
                 await sync_routes_and_clinics()
 
         form_controls: List[ft.Control] = [
@@ -4615,37 +4720,13 @@ def main(page: ft.Page) -> None:
                     ),
                 ],
             ),
-            styled_text_field(
-                pal,
-                label="Nombre de usuario" if is_register else "Usuario o correo electrónico",
-                value=state.reg_username,
-                prefix_icon=ft.Icons.PERSON,
-                on_change=lambda e: setattr(state, "reg_username", e.control.value or ""),
-            ),
+            username_tf,
         ]
 
         if is_register:
-            form_controls.append(
-                styled_text_field(
-                    pal,
-                    label="Correo electrónico vinculado",
-                    value=state.reg_email,
-                    prefix_icon=ft.Icons.EMAIL,
-                    on_change=lambda e: setattr(state, "reg_email", e.control.value or ""),
-                )
-            )
+            form_controls.append(email_tf)
 
-        form_controls.append(
-            styled_text_field(
-                pal,
-                label="Contraseña (mín. 6 caracteres)",
-                value=state.reg_password,
-                prefix_icon=ft.Icons.LOCK,
-                password=True,
-                can_reveal_password=True,
-                on_change=lambda e: setattr(state, "reg_password", e.control.value or ""),
-            )
-        )
+        form_controls.append(password_tf)
 
         if is_register:
             form_controls.append(
@@ -4732,30 +4813,10 @@ def main(page: ft.Page) -> None:
                                         ft.Text("Familiar / Tutor registrado", size=13, weight=ft.FontWeight.BOLD, color=pal.info_text),
                                     ],
                                 ),
-                                styled_text_field(
-                                    pal,
-                                    label="Nombre del familiar *",
-                                    value=state.reg_guardian_name,
-                                    on_change=lambda e: setattr(state, "reg_guardian_name", e.control.value or ""),
-                                ),
-                                styled_text_field(
-                                    pal,
-                                    label="Parentesco",
-                                    value=state.reg_guardian_relation,
-                                    on_change=lambda e: setattr(state, "reg_guardian_relation", e.control.value or ""),
-                                ),
-                                styled_text_field(
-                                    pal,
-                                    label="Teléfono del familiar *",
-                                    value=state.reg_guardian_phone,
-                                    on_change=lambda e: setattr(state, "reg_guardian_phone", e.control.value or ""),
-                                ),
-                                styled_text_field(
-                                    pal,
-                                    label="Correo del familiar (opcional)",
-                                    value=state.reg_guardian_email,
-                                    on_change=lambda e: setattr(state, "reg_guardian_email", e.control.value or ""),
-                                ),
+                                guardian_name_tf,
+                                guardian_rel_tf,
+                                guardian_phone_tf,
+                                guardian_email_tf,
                             ],
                         ),
                     )

@@ -295,6 +295,112 @@ $mobileBridgeScript = @'
         } catch (e) {}
       }
 
+      // Selector nativo HTML de fotos compatible al 100% con iOS Safari (Fototeca / Cámara) y Android
+      function openNativePhotoPicker(titleText) {
+        var existing = document.getElementById("mi-photo-overlay");
+        if (existing) existing.remove();
+
+        var overlay = document.createElement("div");
+        overlay.id = "mi-photo-overlay";
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:999999;background:rgba(15,23,42,0.68);" +
+          "display:flex;align-items:center;justify-content:center;padding:20px;" +
+          "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;";
+
+        var card = document.createElement("div");
+        card.style.cssText =
+          "width:100%;max-width:340px;background:#FFFFFF;border-radius:18px;padding:20px;" +
+          "box-shadow:0 20px 50px rgba(0,0,0,0.35);text-align:center;color:#0F172A;";
+
+        var h = document.createElement("div");
+        h.textContent = titleText || "Seleccionar foto de rostro";
+        h.style.cssText = "font-size:16px;font-weight:700;margin-bottom:8px;color:#1B2354;";
+
+        var sub = document.createElement("div");
+        sub.textContent = "Toca el botón azul para elegir una foto de tu Fototeca o tomar una con tu cámara.";
+        sub.style.cssText = "font-size:13px;color:#475569;margin-bottom:16px;line-height:1.4;";
+
+        var input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.style.cssText = "position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;";
+
+        var pickLabel = document.createElement("label");
+        pickLabel.textContent = "📷 Elegir foto o cámara";
+        pickLabel.style.cssText =
+          "display:block;width:100%;box-sizing:border-box;background:#2563EB;color:#FFFFFF;" +
+          "font-size:15px;font-weight:600;padding:13px 16px;border-radius:12px;cursor:pointer;margin-bottom:10px;";
+        pickLabel.appendChild(input);
+
+        var cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.textContent = "Cancelar";
+        cancelBtn.style.cssText =
+          "display:block;width:100%;background:#F1F5F9;color:#334155;border:none;" +
+          "font-size:14px;font-weight:600;padding:11px 16px;border-radius:12px;cursor:pointer;";
+        cancelBtn.onclick = function () { overlay.remove(); };
+
+        input.onchange = function () {
+          var file = input.files && input.files[0];
+          if (!file) return;
+          sub.textContent = "Procesando imagen...";
+          var reader = new FileReader();
+          reader.onload = function (ev) {
+            var dataUrl = ev.target && ev.target.result ? String(ev.target.result) : "";
+            var img = new Image();
+            img.onload = function () {
+              try {
+                var maxDim = 360;
+                var w = img.naturalWidth || img.width || maxDim;
+                var h2 = img.naturalHeight || img.height || maxDim;
+                var scale = Math.min(1, maxDim / Math.max(w, h2));
+                var cw = Math.max(1, Math.round(w * scale));
+                var ch = Math.max(1, Math.round(h2 * scale));
+                var canvas = document.createElement("canvas");
+                canvas.width = cw;
+                canvas.height = ch;
+                var ctx2d = canvas.getContext("2d");
+                ctx2d.drawImage(img, 0, 0, cw, ch);
+                var jpegUrl = canvas.toDataURL("image/jpeg", 0.82);
+                var b64 = jpegUrl.split(",")[1] || "";
+                overlay.remove();
+                sendToPython({ type: "photo_result", b64: b64, name: file.name || "rostro.jpg" });
+              } catch (err) {
+                var fallbackB64 = dataUrl.indexOf(",") > -1 ? dataUrl.split(",")[1] : "";
+                overlay.remove();
+                if (fallbackB64) {
+                  sendToPython({ type: "photo_result", b64: fallbackB64, name: file.name || "rostro.jpg" });
+                } else {
+                  sendToPython({ type: "photo_error", message: "No se pudo procesar la foto seleccionada." });
+                }
+              }
+            };
+            img.onerror = function () {
+              var fallbackB64 = dataUrl.indexOf(",") > -1 ? dataUrl.split(",")[1] : "";
+              overlay.remove();
+              if (fallbackB64) {
+                sendToPython({ type: "photo_result", b64: fallbackB64, name: file.name || "rostro.jpg" });
+              } else {
+                sendToPython({ type: "photo_error", message: "Formato de imagen no soportado. Intenta con JPG o PNG." });
+              }
+            };
+            img.src = dataUrl;
+          };
+          reader.onerror = function () {
+            overlay.remove();
+            sendToPython({ type: "photo_error", message: "Error al leer el archivo de imagen." });
+          };
+          reader.readAsDataURL(file);
+        };
+
+        card.appendChild(h);
+        card.appendChild(sub);
+        card.appendChild(pickLabel);
+        card.appendChild(cancelBtn);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+      }
+
       if (channel) {
         channel.onmessage = function (evt) {
           var msg = null;
@@ -302,6 +408,8 @@ $mobileBridgeScript = @'
           if (!msg || !msg.type) return;
           if (msg.type === "request_gps") {
             requestBrowserGps();
+          } else if (msg.type === "pick_photo") {
+            openNativePhotoPicker(msg.title || "Seleccionar foto de rostro");
           } else if (msg.type === "speak") {
             speakSpanish(msg.text || "");
           } else if (msg.type === "speak_stop") {
