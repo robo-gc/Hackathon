@@ -32,6 +32,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 import uuid
 import wave
@@ -1943,13 +1944,29 @@ def main(page: ft.Page) -> None:
     def is_auditory_profile_active() -> bool:
         return "auditivo" in state.disabilities
 
+    audio_cmd_seq = {"n": 0}
+
+    async def push_web_audio_cmd(prefix: str, payload: str = "") -> None:
+        if sys.platform == "emscripten" and hasattr(page, "push_route"):
+            audio_cmd_seq["n"] += 1
+            seq = audio_cmd_seq["n"]
+            suffix = f"/{payload}" if payload else ""
+            try:
+                await page.push_route(f"{prefix}/{seq}{suffix}")
+            except Exception:
+                pass
+
     async def speak_current_step() -> None:
         if not state.voice_enabled or is_auditory_profile_active():
             return
         steps = get_active_nav_steps()
         idx = min(max(state.nav_step_index, 0), len(steps) - 1)
         spoken = str(steps[idx].get("spoken_text") or "").strip()
-        if spoken:
+        if not spoken:
+            return
+        if sys.platform == "emscripten":
+            await push_web_audio_cmd("/speak", urllib.parse.quote(spoken, safe=""))
+        else:
             await asyncio.to_thread(speak_spanish_instruction, spoken)
 
     async def navigation_simulation_loop(generation: int) -> None:
@@ -1981,6 +1998,8 @@ def main(page: ft.Page) -> None:
         state.nav_sim_running = False
         state.nav_sim_generation += 1
         stop_voice_speech()
+        if sys.platform == "emscripten":
+            page.run_task(push_web_audio_cmd, "/speak-stop")
         render()
 
     def advance_nav_step() -> None:
@@ -2014,8 +2033,8 @@ def main(page: ft.Page) -> None:
             "guardian_contact": contact,
             "location_text": state.origin,
             "destination": state.destination,
-            "latitude": 19.3498,
-            "longitude": -99.1617,
+            "latitude": state.current_lat,
+            "longitude": state.current_lon,
             "status": status_label,
         }
         try:
@@ -2046,6 +2065,12 @@ def main(page: ft.Page) -> None:
         state.live_sharing_generation += 1
 
     async def lost_sound_loop(generation: int) -> None:
+        if sys.platform == "emscripten":
+            await push_web_audio_cmd("/siren-start")
+            while state.lost_alarm_active and state.lost_alarm_generation == generation:
+                await asyncio.sleep(0.5)
+            await push_web_audio_cmd("/siren-stop")
+            return
         while state.lost_alarm_active and state.lost_alarm_generation == generation:
             await asyncio.to_thread(play_alert_sound_once)
             await asyncio.sleep(0.35)
@@ -2054,6 +2079,8 @@ def main(page: ft.Page) -> None:
         state.lost_alarm_active = False
         state.lost_alarm_generation += 1
         stop_alert_sound_immediately()
+        if sys.platform == "emscripten":
+            page.run_task(push_web_audio_cmd, "/siren-stop")
         try:
             page.pop_dialog()
         except Exception:
