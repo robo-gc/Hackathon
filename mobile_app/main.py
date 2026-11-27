@@ -1628,6 +1628,26 @@ def main(page: ft.Page) -> None:
             geolocator = None
 
     pending_locate_feedback = {"show": False}
+    web_bridge_state: Dict[str, Any] = {"channel": None, "proxy": None}
+
+    def is_local_backend_unreachable_on_web() -> bool:
+        return sys.platform == "emscripten" and (
+            "127.0.0.1" in state.api_url or "localhost" in state.api_url
+        )
+
+    def send_web_bridge_cmd(cmd_type: str, **extra: Any) -> bool:
+        """Envía comandos al navegador (GPS, Voz, Sirena, Vibración) vía BroadcastChannel sin alterar rutas ni cerrar diálogos."""
+        if sys.platform != "emscripten":
+            return False
+        ch = web_bridge_state.get("channel")
+        if ch is None:
+            return False
+        try:
+            payload = {"type": cmd_type, **extra}
+            ch.postMessage(json.dumps(payload))
+            return True
+        except Exception:
+            return False
 
     def apply_location_result(
         lat: float,
@@ -1664,33 +1684,44 @@ def main(page: ft.Page) -> None:
             render()
         if pending_locate_feedback["show"]:
             msg = (
-                "Se denegó el permiso de GPS en el navegador; usando ubicación aproximada."
+                "Se denegó el permiso de GPS en el navegador; habilítalo en Ajustes / Safari / Chrome."
                 if code == "1"
                 else f"No se recibió señal GPS; usando {state.current_location_source}."
             )
             show_info_dialog("Ubicación actual", f"{msg}\n\nUbicación: {state.origin}")
 
-    def on_route_change(e: Any) -> None:
-        route = (getattr(e, "route", "") or getattr(page, "route", "") or "").strip()
-        if route.startswith("/gps/"):
-            parts = route.split("/")
-            if len(parts) >= 4:
-                try:
-                    lat = float(parts[2])
-                    lon = float(parts[3])
-                    acc = float(parts[4]) if len(parts) >= 5 and parts[4] else None
-                    page.run_task(apply_browser_gps_async, lat, lon, acc)
-                except ValueError:
-                    pass
-        elif route.startswith("/gps-error/"):
-            parts = route.split("/")
-            code = parts[2] if len(parts) >= 3 else "unknown"
-            page.run_task(handle_browser_gps_error_async, code)
+    if sys.platform == "emscripten":
+        try:
+            import js  # type: ignore
+            from pyodide.ffi import create_proxy  # type: ignore
 
-    try:
-        page.on_route_change = on_route_change
-    except Exception:
-        pass
+            ch = js.BroadcastChannel.new("map_inclusive_native")
+
+            def _on_web_bridge_message(evt: Any) -> None:
+                try:
+                    raw = str(evt.data)
+                    msg = json.loads(raw)
+                except Exception:
+                    return
+                mtype = msg.get("type")
+                if mtype == "gps_result":
+                    try:
+                        lat = float(msg["lat"])
+                        lon = float(msg["lon"])
+                        acc = float(msg["acc"]) if msg.get("acc") is not None else None
+                        page.run_task(apply_browser_gps_async, lat, lon, acc)
+                    except Exception:
+                        pass
+                elif mtype == "gps_error":
+                    code = str(msg.get("code", "unknown"))
+                    page.run_task(handle_browser_gps_error_async, code)
+
+            proxy = create_proxy(_on_web_bridge_message)
+            ch.onmessage = proxy
+            web_bridge_state["channel"] = ch
+            web_bridge_state["proxy"] = proxy
+        except Exception:
+            pass
 
     async def locate_current_user_async(show_dialog_on_done: bool = True) -> None:
         if state.is_locating:
@@ -1699,16 +1730,12 @@ def main(page: ft.Page) -> None:
         pending_locate_feedback["show"] = show_dialog_on_done
         render()
 
-        if sys.platform == "emscripten" and hasattr(page, "push_route"):
-            try:
-                ts = datetime.now().strftime("%H%M%S")
-                await page.push_route(f"/request-gps/{ts}")
+        if sys.platform == "emscripten":
+            if send_web_bridge_cmd("request_gps"):
                 await asyncio.sleep(12)
                 if state.is_locating:
                     await handle_browser_gps_error_async("timeout")
                 return
-            except Exception:
-                pass
 
         found: Optional[Dict[str, Any]] = None
         if geolocator is not None and ftg is not None:
@@ -1944,18 +1971,6 @@ def main(page: ft.Page) -> None:
     def is_auditory_profile_active() -> bool:
         return "auditivo" in state.disabilities
 
-    audio_cmd_seq = {"n": 0}
-
-    async def push_web_audio_cmd(prefix: str, payload: str = "") -> None:
-        if sys.platform == "emscripten" and hasattr(page, "push_route"):
-            audio_cmd_seq["n"] += 1
-            seq = audio_cmd_seq["n"]
-            suffix = f"/{payload}" if payload else ""
-            try:
-                await page.push_route(f"{prefix}/{seq}{suffix}")
-            except Exception:
-                pass
-
     async def speak_current_step() -> None:
         if not state.voice_enabled or is_auditory_profile_active():
             return
@@ -1965,7 +1980,7 @@ def main(page: ft.Page) -> None:
         if not spoken:
             return
         if sys.platform == "emscripten":
-            await push_web_audio_cmd("/speak", urllib.parse.quote(spoken, safe=""))
+            send_web_bridge_cmd("speak", text=spoken)
         else:
             await asyncio.to_thread(speak_spanish_instruction, spoken)
 
@@ -1999,7 +2014,7 @@ def main(page: ft.Page) -> None:
         state.nav_sim_generation += 1
         stop_voice_speech()
         if sys.platform == "emscripten":
-            page.run_task(push_web_audio_cmd, "/speak-stop")
+            send_web_bridge_cmd("speak_stop")
         render()
 
     def advance_nav_step() -> None:
@@ -2066,10 +2081,10 @@ def main(page: ft.Page) -> None:
 
     async def lost_sound_loop(generation: int) -> None:
         if sys.platform == "emscripten":
-            await push_web_audio_cmd("/siren-start")
+            send_web_bridge_cmd("siren_start")
             while state.lost_alarm_active and state.lost_alarm_generation == generation:
                 await asyncio.sleep(0.5)
-            await push_web_audio_cmd("/siren-stop")
+            send_web_bridge_cmd("siren_stop")
             return
         while state.lost_alarm_active and state.lost_alarm_generation == generation:
             await asyncio.to_thread(play_alert_sound_once)
@@ -2080,7 +2095,7 @@ def main(page: ft.Page) -> None:
         state.lost_alarm_generation += 1
         stop_alert_sound_immediately()
         if sys.platform == "emscripten":
-            page.run_task(push_web_audio_cmd, "/siren-stop")
+            send_web_bridge_cmd("siren_stop")
         try:
             page.pop_dialog()
         except Exception:
@@ -2089,6 +2104,8 @@ def main(page: ft.Page) -> None:
 
     async def activate_lost_minor_alarm() -> None:
         stop_voice_speech()
+        if sys.platform == "emscripten":
+            send_web_bridge_cmd("speak_stop")
         state.lost_alarm_active = True
         state.lost_alarm_generation += 1
         gen = state.lost_alarm_generation
@@ -2100,37 +2117,41 @@ def main(page: ft.Page) -> None:
         g_phone = guardian.get("phone") or "911"
         g_email = guardian.get("email") or ""
 
-        page.run_task(lost_sound_loop, gen)
-
         helper_msg = (
             f"¡ALERTA DE EXTRAVÍO! {username} ({format_disabilities_label(state.disabilities)}) "
             f"necesita ayuda.\n\nPor favor comunícate con su familiar:\n"
             f"• Familiar: {g_name}\n"
             f"• Teléfono: {g_phone}"
             + (f"\n• Correo: {g_email}" if g_email else "")
+            + f"\n• Ubicación: {state.origin}"
+            + f"\n• GPS: {format_coords_text(state.current_lat, state.current_lon, state.current_accuracy_m)}"
             + "\n• Emergencias: 911"
         )
 
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.post(
-                    f"{state.api_url}/api/v1/guardian/lost-alert",
-                    json={
-                        "user_id": user["id"] if user else None,
-                        "username": username,
-                        "guardian_name": g_name,
-                        "guardian_phone": g_phone,
-                        "guardian_email": g_email,
-                        "location_text": state.origin,
-                        "disabilities": state.disabilities,
-                    },
-                )
-                if resp.status_code < 300:
-                    helper_msg = resp.json().get("helper_message", helper_msg)
-        except Exception:
-            pass
+        # Iniciar sonido y abrir el diálogo de inmediato (sin esperar backend ni cerrar ventanas)
+        page.run_task(lost_sound_loop, gen)
 
-        if is_minor_with_guardian():
+        if not is_local_backend_unreachable_on_web():
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    resp = await client.post(
+                        f"{state.api_url}/api/v1/guardian/lost-alert",
+                        json={
+                            "user_id": user["id"] if user else None,
+                            "username": username,
+                            "guardian_name": g_name,
+                            "guardian_phone": g_phone,
+                            "guardian_email": g_email,
+                            "location_text": state.origin,
+                            "disabilities": state.disabilities,
+                        },
+                    )
+                    if resp.status_code < 300:
+                        helper_msg = resp.json().get("helper_message", helper_msg)
+            except Exception:
+                pass
+
+        if is_minor_with_guardian() and not is_local_backend_unreachable_on_web():
             page.run_task(send_guardian_location_once, "extraviado")
 
         pal = t()
@@ -2157,30 +2178,36 @@ def main(page: ft.Page) -> None:
                             controls=[
                                 ft.Icon(ft.Icons.VOLUME_UP, color=ft.Colors.WHITE, size=22),
                                 ft.Text(
-                                    "Emitiendo sonido fuerte para alertar a personas cercanas...",
+                                    "Emitiendo sonido fuerte para alertar a personas cercanas... "
+                                    "(En iPhone verifica que el botón lateral de silencio esté desactivado).",
                                     color=ft.Colors.WHITE,
                                     weight=ft.FontWeight.BOLD,
-                                    size=13,
+                                    size=12,
                                     expand=True,
                                 ),
                             ],
                         ),
                     ),
-                    ft.Text(helper_msg, size=14, weight=ft.FontWeight.W_600, color=pal.danger_text),
+                    ft.Text(helper_msg, size=13, weight=ft.FontWeight.W_600, color=pal.danger_text),
                 ],
             ),
             actions=[
+                ft.OutlinedButton(
+                    content="Reintentar sonido",
+                    icon=ft.Icons.VOLUME_UP,
+                    on_click=lambda _: send_web_bridge_cmd("siren_start") if sys.platform == "emscripten" else page.run_task(lost_sound_loop, gen),
+                ),
                 ft.FilledButton(
-                    content="Detener alarma sonora",
+                    content="Detener alarma",
                     icon=ft.Icons.STOP_CIRCLE,
                     bgcolor=pal.indigo,
                     color=ft.Colors.WHITE,
                     on_click=stop_lost_alarm,
-                )
+                ),
             ],
         )
         page.show_dialog(alarm_dialog)
-        render()
+        page.update()
 
     # -----------------------------------------------------------------------
     # Emergencia SOS
@@ -2190,7 +2217,11 @@ def main(page: ft.Page) -> None:
         dis_label = format_disabilities_label(state.disabilities)
 
         async def send_sos() -> None:
-            page.pop_dialog()
+            try:
+                page.pop_dialog()
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
             payload = {
                 "location": state.origin,
                 "profile": state.disabilities[0],
@@ -2198,32 +2229,52 @@ def main(page: ft.Page) -> None:
                 "username": state.current_user["username"] if state.current_user else None,
                 "notes": f"Alerta SOS activada rumbo a {state.destination}",
             }
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.post(f"{state.api_url}/api/v1/emergency", json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    nums = "\n".join(f"• {n}" for n in data.get("emergency_numbers", []))
-                    show_info_dialog(
-                        "Alerta de Emergencia Enviada",
-                        f"{data.get('message', '')}\n\n"
-                        f"Urgencias más cercanas:\n{data.get('nearest_emergency_clinic', '')}\n\n"
-                        f"Teléfonos de emergencia:\n{nums}",
+            if not is_local_backend_unreachable_on_web():
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        resp = await client.post(f"{state.api_url}/api/v1/emergency", json=payload)
+                        resp.raise_for_status()
+                        data = resp.json()
+                        nums = "\n".join(f"• {n}" for n in data.get("emergency_numbers", []))
+                        show_info_dialog(
+                            "Alerta de Emergencia Enviada",
+                            f"{data.get('message', '')}\n\n"
+                            f"Urgencias más cercanas:\n{data.get('nearest_emergency_clinic', '')}\n\n"
+                            f"Teléfonos de emergencia:\n{nums}",
+                        )
+                        return
+                except Exception:
+                    pass
+
+            if sys.platform == "emscripten":
+                send_web_bridge_cmd("vibrate")
+                if state.voice_enabled and not is_auditory_profile_active():
+                    send_web_bridge_cmd(
+                        "speak",
+                        text="Alerta de emergencia SOS activada. Comunícate al 911 o acude al Hospital General Xoco.",
                     )
+            show_info_dialog(
+                "Emergencia SOS Activada",
+                f"Perfiles activos: {dis_label}\n"
+                f"Ubicación: {state.origin}\n"
+                f"GPS: {format_coords_text(state.current_lat, state.current_lon, state.current_accuracy_m)}\n\n"
+                "Urgencias más cercanas: Hospital General Xoco (24h · Tel. 55 5688 9015)\n\n"
+                "Comunícate de inmediato:\n"
+                "• 911 — Emergencias generales\n"
+                "• 065 — Cruz Roja Mexicana\n"
+                "• 55 5658 1111 — LOCATEL 24h",
+            )
+
+        async def _trigger_lost_after_close() -> None:
+            try:
+                page.pop_dialog()
             except Exception:
-                show_info_dialog(
-                    "Emergencia SOS (Modo Local)",
-                    f"Perfiles activos: {dis_label}\nUbicación: {state.origin}\n\n"
-                    "Urgencias más cercanas: Hospital General Xoco (24h · Tel. 55 5688 9015)\n\n"
-                    "Comunícate de inmediato:\n"
-                    "• 911 — Emergencias generales\n"
-                    "• 065 — Cruz Roja Mexicana\n"
-                    "• 55 5658 1111 — LOCATEL 24h",
-                )
+                pass
+            await asyncio.sleep(0.08)
+            await activate_lost_minor_alarm()
 
         def trigger_lost_from_sos(_: ft.ControlEvent) -> None:
-            page.pop_dialog()
-            page.run_task(activate_lost_minor_alarm)
+            page.run_task(_trigger_lost_after_close)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -2902,6 +2953,27 @@ def main(page: ft.Page) -> None:
                             )
                             if not state.auto_located_once
                             else None,
+                        ),
+                    ),
+                    styled_outlined_button(
+                        pal,
+                        text="Activar sonido y permiso GPS (iOS / Android)",
+                        icon=ft.Icons.VOLUME_UP,
+                        icon_color=pal.emerald,
+                        width=float("inf"),
+                        height=44,
+                        on_click=lambda _: (
+                            send_web_bridge_cmd(
+                                "unlock_and_test",
+                                text="Sonido y permisos activados en Map Inclusive.",
+                            )
+                            if sys.platform == "emscripten"
+                            else page.run_task(
+                                asyncio.to_thread,
+                                speak_spanish_instruction,
+                                "Sonido y permisos activados en Map Inclusive.",
+                            ),
+                            page.run_task(locate_current_user_async, True),
                         ),
                     ),
                     styled_outlined_button(

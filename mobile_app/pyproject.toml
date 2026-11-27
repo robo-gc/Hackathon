@@ -21,3 +21,8 @@ path = "."
 "android.permission.INTERNET" = true
 "android.permission.ACCESS_FINE_LOCATION" = true
 "android.permission.ACCESS_COARSE_LOCATION" = true
+"android.permission.VIBRATE" = true
+
+[tool.flet.ios.info]
+NSLocationWhenInUseUsageDescription = "Map Inclusive necesita tu ubicación actual para mostrarte rutas accesibles, clínicas y alertas cercanas."
+NSLocationAlwaysAndWhenInUseUsageDescription = "Map Inclusive usa tu ubicación para rutas accesibles y alertas de seguridad."
