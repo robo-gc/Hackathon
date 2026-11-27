@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import math
 import os
 import shutil
@@ -31,6 +32,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.request
 import uuid
 import wave
 from dataclasses import dataclass, field
@@ -40,6 +42,87 @@ from typing import Any, Callable, Dict, List, Optional
 
 import flet as ft
 import httpx
+
+try:
+    import flet_geolocator as ftg
+except ImportError:
+    ftg = None  # type: ignore
+
+XMIND_FONT_REGULAR = "NeverMind"
+XMIND_FONT_MEDIUM = "NeverMindMedium"
+XMIND_FONT_DEMIBOLD = "NeverMindDemiBold"
+XMIND_FONT_BOLD = "NeverMindBold"
+XMIND_FONTS_MAP = {
+    XMIND_FONT_REGULAR: "fonts/NeverMind-Regular.ttf",
+    XMIND_FONT_MEDIUM: "fonts/NeverMind-Medium.ttf",
+    XMIND_FONT_DEMIBOLD: "fonts/NeverMind-DemiBold.ttf",
+    XMIND_FONT_BOLD: "fonts/NeverMind-Bold.ttf",
+}
+CAMPUS_COYOACAN_LAT = 19.3467
+CAMPUS_COYOACAN_LON = -99.1617
+
+
+def _http_get_json_sync(url: str, timeout: int = 5) -> Optional[Any]:
+    """Obtiene JSON vía HTTP en Python nativo/Android y en Pyodide (Web/WASM)."""
+    if sys.platform == "emscripten":
+        try:
+            from pyodide.http import open_url  # type: ignore
+
+            return json.loads(open_url(url).read())
+        except Exception:
+            return None
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "MapInclusive-ApexSoa/1.0 (Campus Coyoacan)"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def reverse_geocode_location(lat: float, lon: float) -> str:
+    """Convierte coordenadas GPS a calle/colonia/ciudad legible (OpenStreetMap Nominatim)."""
+    url = (
+        f"https://nominatim.openstreetmap.org/reverse?"
+        f"format=jsonv2&lat={lat:.6f}&lon={lon:.6f}&zoom=17&accept-language=es"
+    )
+    data = _http_get_json_sync(url, timeout=5)
+    if isinstance(data, dict):
+        addr = data.get("address", {}) if isinstance(data.get("address"), dict) else {}
+        road = addr.get("road") or addr.get("pedestrian") or addr.get("neighbourhood") or ""
+        suburb = addr.get("suburb") or addr.get("borough") or addr.get("city_district") or ""
+        city = addr.get("city") or addr.get("town") or addr.get("state") or ""
+        parts = [p for p in (road, suburb, city) if p]
+        if parts:
+            return ", ".join(parts[:3])
+        display = str(data.get("display_name", "")).strip()
+        if display:
+            return ", ".join(display.split(",")[:3]).strip()
+    return f"Ubicación detectada ({lat:.4f}, {lon:.4f})"
+
+
+def fetch_ip_location_sync() -> Optional[Dict[str, Any]]:
+    """Respaldo aproximado por IP cuando el dispositivo no expone GPS nativo."""
+    data = _http_get_json_sync("https://ipwho.is/", timeout=5)
+    if isinstance(data, dict) and data.get("success") and data.get("latitude") is not None and data.get("longitude") is not None:
+        lat = float(data["latitude"])
+        lon = float(data["longitude"])
+        parts = [p for p in (data.get("city"), data.get("region"), data.get("country")) if p]
+        return {
+            "lat": lat,
+            "lon": lon,
+            "accuracy_m": None,
+            "label": ", ".join(parts) if parts else f"{lat:.4f}, {lon:.4f}",
+            "source": "Ubicación aproximada (red)",
+        }
+    return None
+
+
+def format_coords_text(lat: float, lon: float, accuracy_m: Optional[float] = None) -> str:
+    acc = f" · ±{int(round(accuracy_m))}m" if accuracy_m is not None else ""
+    return f"{lat:.5f}, {lon:.5f}{acc}"
 
 TEN_MINUTES_SECONDS = 600
 MINOR_TRACKING_INTERVAL_SECONDS = 15
@@ -964,6 +1047,15 @@ class AppState:
     destination: str = "Clínica 19 (UMF IMSS)"
     search_query: str = ""
 
+    # Ubicación actual del usuario (GPS real o respaldo)
+    current_lat: float = CAMPUS_COYOACAN_LAT
+    current_lon: float = CAMPUS_COYOACAN_LON
+    current_accuracy_m: Optional[float] = None
+    current_location_source: str = "Referencia Campus Coyoacán"
+    current_location_updated_at: Optional[str] = None
+    is_locating: bool = False
+    auto_located_once: bool = False
+
     suggestions: List[Dict[str, Any]] = field(
         default_factory=lambda: build_local_suggestions(["silla_de_ruedas"])
     )
@@ -1509,6 +1601,249 @@ def main(page: ft.Page) -> None:
     state = AppState()
     file_picker = ft.FilePicker()
 
+    # Registrar tipografía oficial de XMind (NeverMind) y servicio GPS nativo
+    try:
+        page.fonts = XMIND_FONTS_MAP
+        xmind_text_theme = ft.TextTheme(
+            headline_medium=ft.TextStyle(font_family=XMIND_FONT_BOLD),
+            title_large=ft.TextStyle(font_family=XMIND_FONT_BOLD),
+            title_medium=ft.TextStyle(font_family=XMIND_FONT_DEMIBOLD),
+            label_large=ft.TextStyle(font_family=XMIND_FONT_DEMIBOLD),
+            body_large=ft.TextStyle(font_family=XMIND_FONT_REGULAR),
+            body_medium=ft.TextStyle(font_family=XMIND_FONT_REGULAR),
+            body_small=ft.TextStyle(font_family=XMIND_FONT_REGULAR),
+        )
+        page.theme = ft.Theme(font_family=XMIND_FONT_REGULAR, text_theme=xmind_text_theme)
+        page.dark_theme = ft.Theme(font_family=XMIND_FONT_REGULAR, text_theme=xmind_text_theme)
+    except Exception:
+        pass
+
+    geolocator = None
+    if ftg is not None and sys.platform != "emscripten" and hasattr(page, "services"):
+        try:
+            geolocator = ftg.Geolocator()
+            page.services.append(geolocator)
+        except Exception:
+            geolocator = None
+
+    pending_locate_feedback = {"show": False}
+
+    def apply_location_result(
+        lat: float,
+        lon: float,
+        label: str,
+        source: str,
+        accuracy_m: Optional[float] = None,
+    ) -> None:
+        state.current_lat = lat
+        state.current_lon = lon
+        state.current_accuracy_m = accuracy_m
+        state.current_location_source = source
+        state.current_location_updated_at = datetime.now().strftime("%H:%M:%S")
+        state.origin = label
+        state.waze_location = label
+        state.is_locating = False
+        render()
+
+    async def apply_browser_gps_async(lat: float, lon: float, acc: Optional[float]) -> None:
+        label = reverse_geocode_location(lat, lon)
+        apply_location_result(lat, lon, label, "GPS en vivo", acc)
+        if pending_locate_feedback["show"]:
+            show_info_dialog(
+                "Ubicación GPS actualizada",
+                f"Dirección detectada:\n{label}\n\nCoordenadas:\n{format_coords_text(lat, lon, acc)}",
+            )
+
+    async def handle_browser_gps_error_async(code: str) -> None:
+        fb = fetch_ip_location_sync()
+        if fb is not None:
+            apply_location_result(fb["lat"], fb["lon"], fb["label"], fb["source"], None)
+        else:
+            state.is_locating = False
+            render()
+        if pending_locate_feedback["show"]:
+            msg = (
+                "Se denegó el permiso de GPS en el navegador; usando ubicación aproximada."
+                if code == "1"
+                else f"No se recibió señal GPS; usando {state.current_location_source}."
+            )
+            show_info_dialog("Ubicación actual", f"{msg}\n\nUbicación: {state.origin}")
+
+    def on_route_change(e: Any) -> None:
+        route = (getattr(e, "route", "") or getattr(page, "route", "") or "").strip()
+        if route.startswith("/gps/"):
+            parts = route.split("/")
+            if len(parts) >= 4:
+                try:
+                    lat = float(parts[2])
+                    lon = float(parts[3])
+                    acc = float(parts[4]) if len(parts) >= 5 and parts[4] else None
+                    page.run_task(apply_browser_gps_async, lat, lon, acc)
+                except ValueError:
+                    pass
+        elif route.startswith("/gps-error/"):
+            parts = route.split("/")
+            code = parts[2] if len(parts) >= 3 else "unknown"
+            page.run_task(handle_browser_gps_error_async, code)
+
+    try:
+        page.on_route_change = on_route_change
+    except Exception:
+        pass
+
+    async def locate_current_user_async(show_dialog_on_done: bool = True) -> None:
+        if state.is_locating:
+            return
+        state.is_locating = True
+        pending_locate_feedback["show"] = show_dialog_on_done
+        render()
+
+        if sys.platform == "emscripten" and hasattr(page, "push_route"):
+            try:
+                ts = datetime.now().strftime("%H%M%S")
+                await page.push_route(f"/request-gps/{ts}")
+                await asyncio.sleep(12)
+                if state.is_locating:
+                    await handle_browser_gps_error_async("timeout")
+                return
+            except Exception:
+                pass
+
+        found: Optional[Dict[str, Any]] = None
+        if geolocator is not None and ftg is not None:
+            try:
+                perm = await geolocator.request_permission()
+                allowed = {
+                    ftg.GeolocatorPermissionStatus.WHILE_IN_USE,
+                    ftg.GeolocatorPermissionStatus.ALWAYS,
+                }
+                if perm in allowed:
+                    cfg = ftg.GeolocatorConfiguration(accuracy=ftg.GeolocatorPositionAccuracy.HIGH)
+                    pos = await geolocator.get_current_position(configuration=cfg)
+                    lat = float(getattr(pos, "latitude"))
+                    lon = float(getattr(pos, "longitude"))
+                    acc_raw = getattr(pos, "accuracy", None)
+                    acc = float(acc_raw) if acc_raw is not None else None
+                    label = await asyncio.to_thread(reverse_geocode_location, lat, lon)
+                    found = {
+                        "lat": lat,
+                        "lon": lon,
+                        "accuracy_m": acc,
+                        "label": label,
+                        "source": "GPS en vivo",
+                    }
+            except Exception:
+                found = None
+
+        if found is None:
+            try:
+                found = await asyncio.to_thread(fetch_ip_location_sync)
+            except Exception:
+                found = None
+
+        if found is not None:
+            apply_location_result(
+                found["lat"],
+                found["lon"],
+                found["label"],
+                found["source"],
+                found["accuracy_m"],
+            )
+            if show_dialog_on_done:
+                show_info_dialog(
+                    "Ubicación actual detectada",
+                    f"Origen: {found['label']}\n"
+                    f"Coordenadas: {format_coords_text(found['lat'], found['lon'], found['accuracy_m'])}\n"
+                    f"Fuente: {found['source']}",
+                )
+        else:
+            state.is_locating = False
+            render()
+            if show_dialog_on_done:
+                show_info_dialog(
+                    "Ubicación actual",
+                    "No se pudo obtener tu señal GPS ahora. Se mantiene Campus Coyoacán como referencia.",
+                )
+
+    def build_current_location_card() -> ft.Container:
+        pal = t()
+        is_gps = state.current_location_source == "GPS en vivo"
+        return ft.Container(
+            bgcolor=pal.card_bg,
+            border_radius=14,
+            border=ft.Border.all(1.2, pal.blue_action if is_gps else pal.border),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            content=ft.Row(
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Container(
+                        width=36,
+                        height=36,
+                        border_radius=18,
+                        bgcolor=pal.blue_action,
+                        alignment=ft.Alignment.CENTER,
+                        content=ft.Icon(ft.Icons.MY_LOCATION, color=ft.Colors.WHITE, size=19),
+                    ),
+                    ft.Column(
+                        expand=True,
+                        spacing=2,
+                        tight=True,
+                        controls=[
+                            ft.Row(
+                                spacing=6,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=[
+                                    ft.Text(
+                                        "Tu ubicación actual",
+                                        size=12,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=pal.text_heading,
+                                    ),
+                                    ft.Container(
+                                        bgcolor=pal.emerald_bg if is_gps else pal.badge_bg,
+                                        border_radius=8,
+                                        padding=ft.Padding.symmetric(horizontal=6, vertical=1),
+                                        content=ft.Text(
+                                            "Buscando GPS..." if state.is_locating else state.current_location_source,
+                                            size=9,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=pal.emerald_text if is_gps else pal.badge_text,
+                                        ),
+                                    ),
+                                ],
+                            ),
+                            ft.Text(
+                                state.origin,
+                                size=12,
+                                weight=ft.FontWeight.W_600,
+                                color=pal.text_primary,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
+                            ft.Text(
+                                format_coords_text(
+                                    state.current_lat,
+                                    state.current_lon,
+                                    state.current_accuracy_m,
+                                ),
+                                size=10,
+                                color=pal.text_muted,
+                            ),
+                        ],
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.GPS_FIXED,
+                        icon_color=pal.blue_action,
+                        icon_size=21,
+                        tooltip="Obtener mi ubicación actual (GPS)",
+                        disabled=state.is_locating,
+                        on_click=lambda _: page.run_task(locate_current_user_async, True),
+                    ),
+                ],
+            ),
+        )
+
     def t() -> ThemePalette:
         return get_theme(state.dark_mode)
 
@@ -1878,7 +2213,9 @@ def main(page: ft.Page) -> None:
                 spacing=8,
                 controls=[
                     ft.Text(
-                        f"Discapacidades: {dis_label}\nUbicación: {state.origin}",
+                        f"Discapacidades: {dis_label}\n"
+                        f"Ubicación: {state.origin}\n"
+                        f"GPS: {format_coords_text(state.current_lat, state.current_lon, state.current_accuracy_m)}",
                         size=13,
                         weight=ft.FontWeight.W_600,
                         color=pal.text_primary,
@@ -2532,6 +2869,12 @@ def main(page: ft.Page) -> None:
                             setattr(state, "screen", "search"),
                             render(),
                             page.run_task(sync_routes_and_clinics),
+                            (
+                                setattr(state, "auto_located_once", True),
+                                page.run_task(locate_current_user_async, False),
+                            )
+                            if not state.auto_located_once
+                            else None,
                         ),
                     ),
                     styled_outlined_button(
@@ -2678,6 +3021,7 @@ def main(page: ft.Page) -> None:
                             ),
                         ],
                     ),
+                    build_current_location_card(),
                     build_minimalist_map(
                         pal,
                         show_route=False,
@@ -2760,7 +3104,7 @@ def main(page: ft.Page) -> None:
                     ),
                 ],
             ),
-            ft.Text(f"Destino: {state.destination}", size=12, color=pal.text_muted),
+            ft.Text(f"Origen: {state.origin} · Destino: {state.destination}", size=12, color=pal.text_muted),
             ft.Container(
                 bgcolor=pal.info_bg if is_auditory_profile_active() else pal.card_alt,
                 border_radius=10,
@@ -4417,4 +4761,4 @@ def main(page: ft.Page) -> None:
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    ft.run(main, assets_dir=str(Path(__file__).resolve().parent / "assets"))

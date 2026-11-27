@@ -1,0 +1,43 @@
+name: Compilar Map Inclusive APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Compilar Android APK (mobile_app)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configurar Java 17 (Android Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Instalar Flet y Geolocator
+        run: pip install "flet[all]==1.1.3" "flet-geolocator==1.1.3" "httpx>=0.27.0"
+
+      - name: Compilar APK instalable de Map Inclusive
+        working-directory: mobile_app
+        run: flet build apk --yes --no-rich-output
+
+      - name: Verificar APK generado
+        working-directory: mobile_app
+        run: ls -lh build/apk/*.apk
+
+      - name: Subir Map-Inclusive-APK para descarga
+        uses: actions/upload-artifact@v4
+        with:
+          name: Map-Inclusive-APK
+          path: mobile_app/build/apk/*.apk
+          retention-days: 30
