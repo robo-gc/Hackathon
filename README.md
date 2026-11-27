@@ -1,3 +1,7 @@
+Enlace a la APP descargable en android
+
+https://map-inclusive-coyoacan.netlify.app/
+
 # Map Inclusive — Prueba Corta (100% Python + Android con Flet + Gemini API)
 
 **Equipo:** Apex soa (Márquez Fuentes Sebastian, Calderón Pérez Emiliano Javier, Nelson Alejandro Gonzalez Al Daoud)  
