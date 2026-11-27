@@ -27,13 +27,42 @@ $mobileBridgeScript = @'
       var channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("map_inclusive_native") : null;
       var audioCtx = null;
       var sirenAudio = null;
+      var sirenWavUrl = null;
+      var silentWavUrl = null;
+      var sirenActive = false;
       var sirenTimer = null;
       var sirenOsc = null;
       var sirenGain = null;
       var audioUnlocked = false;
 
+      // Genera un WAV 100% silencioso (ceros) SOLO para desbloquear <audio> en iOS sin emitir ningún ruido
+      function buildSilentWavUrl() {
+        var sampleRate = 8000;
+        var totalSamples = 400; // 0.05 s de silencio absoluto
+        var buffer = new ArrayBuffer(44 + totalSamples * 2);
+        var view = new DataView(buffer);
+        function writeStr(offset, s) {
+          for (var i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+        }
+        writeStr(0, "RIFF");
+        view.setUint32(4, 36 + totalSamples * 2, true);
+        writeStr(8, "WAVE");
+        writeStr(12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, "data");
+        view.setUint32(40, totalSamples * 2, true);
+        return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+      }
+
       // Genera un WAV real en memoria (PCM 16-bit) para reproducirlo con <audio> nativo en iOS Safari y Android Chrome
       function buildSirenWavUrl() {
+        if (sirenWavUrl) return sirenWavUrl;
         var sampleRate = 16000;
         var tones = [
           [1200, 0.24],
@@ -75,13 +104,15 @@ $mobileBridgeScript = @'
           }
         }
         var blob = new Blob([buffer], { type: "audio/wav" });
-        return URL.createObjectURL(blob);
+        sirenWavUrl = URL.createObjectURL(blob);
+        return sirenWavUrl;
       }
 
       function ensureSirenAudio() {
         if (!sirenAudio) {
-          sirenAudio = new Audio(buildSirenWavUrl());
-          sirenAudio.loop = true;
+          if (!silentWavUrl) silentWavUrl = buildSilentWavUrl();
+          sirenAudio = new Audio(silentWavUrl);
+          sirenAudio.loop = false;
           sirenAudio.preload = "auto";
           sirenAudio.setAttribute("playsinline", "true");
           sirenAudio.volume = 1.0;
@@ -99,7 +130,7 @@ $mobileBridgeScript = @'
         return audioCtx;
       }
 
-      // Desbloqueo obligatorio para iOS Safari y Chrome Android en toques del usuario
+      // Desbloqueo 100% SILENCIOSO para iOS Safari y Chrome Android (NUNCA reproduce la sirena aquí)
       function unlockMobileAudio() {
         try {
           var ctx = ensureAudioContext();
@@ -114,28 +145,26 @@ $mobileBridgeScript = @'
         if (audioUnlocked) return;
         audioUnlocked = true;
         try {
-          var a = ensureSirenAudio();
-          a.muted = true;
-          var p = a.play();
-          if (p && p.then) {
-            p.then(function () {
-              a.pause();
-              a.currentTime = 0;
-              a.muted = false;
-            }).catch(function () {
-              a.muted = false;
-            });
-          } else {
-            a.pause();
-            a.muted = false;
+          if (!sirenActive) {
+            var a = ensureSirenAudio();
+            if (!silentWavUrl) silentWavUrl = buildSilentWavUrl();
+            a.loop = false;
+            a.src = silentWavUrl;
+            a.volume = 0.0;
+            var p = a.play();
+            if (p && p.then) {
+              p.then(function () {
+                if (!sirenActive) {
+                  a.pause();
+                  a.currentTime = 0;
+                }
+              }).catch(function () {});
+            }
           }
         } catch (e) {}
         try {
           if (window.speechSynthesis) {
             window.speechSynthesis.getVoices();
-            var prime = new SpeechSynthesisUtterance(" ");
-            prime.volume = 0;
-            window.speechSynthesis.speak(prime);
           }
         } catch (e) {}
       }
@@ -194,9 +223,11 @@ $mobileBridgeScript = @'
       }
 
       function stopSiren() {
+        sirenActive = false;
         if (sirenAudio) {
           try {
             sirenAudio.pause();
+            sirenAudio.loop = false;
             sirenAudio.currentTime = 0;
           } catch (e) {}
         }
@@ -216,22 +247,25 @@ $mobileBridgeScript = @'
 
       function startSiren() {
         stopSiren();
-        // 1. Reproducir WAV real con HTML5 <audio> (funciona en iOS Safari y Android Chrome)
+        sirenActive = true;
+        // 1. Reproducir WAV real con HTML5 <audio> (solo cuando el usuario activa la alarma)
         var playedHtmlAudio = false;
         try {
           var a = ensureSirenAudio();
+          a.src = buildSirenWavUrl();
+          a.loop = true;
           a.muted = false;
           a.volume = 1.0;
           a.currentTime = 0;
           var p = a.play();
           playedHtmlAudio = true;
           if (p && p.catch) {
-            p.catch(function () { startOscillatorBackup(); });
+            p.catch(function () { if (sirenActive) startOscillatorBackup(); });
           }
         } catch (e) {
           playedHtmlAudio = false;
         }
-        if (!playedHtmlAudio) {
+        if (!playedHtmlAudio && sirenActive) {
           startOscillatorBackup();
         }
         if (navigator.vibrate) {
